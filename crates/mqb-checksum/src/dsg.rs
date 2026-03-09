@@ -1,6 +1,7 @@
 //! DSG JAMCRC — `0xFFFFFFFF - crc32(data[..-4])`, stored little-endian.
 
 use std::borrow::Cow;
+use mqb_bytes::{read_u32_le, write_u32_le};
 use mqb_modules::ChecksumState;
 
 /// Validate (and optionally fix) a DSG JAMCRC block checksum.
@@ -12,12 +13,7 @@ pub fn validate_dsg(data: &[u8], fix: bool) -> (ChecksumState, Cow<'_, [u8]>) {
     }
 
     let checksum_location = data.len() - 4;
-    let stored = u32::from_le_bytes([
-        data[checksum_location],
-        data[checksum_location + 1],
-        data[checksum_location + 2],
-        data[checksum_location + 3],
-    ]);
+    let stored = read_u32_le(data, checksum_location);
 
     // JAMCRC = NOT(CRC32(data))
     let crc = crc32fast::hash(&data[..checksum_location]);
@@ -27,8 +23,7 @@ pub fn validate_dsg(data: &[u8], fix: bool) -> (ChecksumState, Cow<'_, [u8]>) {
         (ChecksumState::Valid, Cow::Borrowed(data))
     } else if fix {
         let mut fixed = data.to_vec();
-        let bytes = calculated.to_le_bytes();
-        fixed[checksum_location..checksum_location + 4].copy_from_slice(&bytes);
+        write_u32_le(&mut fixed, checksum_location, calculated);
         (ChecksumState::Fixed, Cow::Owned(fixed))
     } else {
         (ChecksumState::Invalid, Cow::Borrowed(data))
@@ -61,7 +56,7 @@ mod tests {
 
         let (state, fixed) = validate_dsg(&data, true);
         assert_eq!(state, ChecksumState::Fixed);
-        let stored = u32::from_le_bytes([fixed[fixed.len() - 4], fixed[fixed.len() - 3], fixed[fixed.len() - 2], fixed[fixed.len() - 1]]);
+        let stored = read_u32_le(&fixed, fixed.len() - 4);
         assert_eq!(stored, correct_checksum);
     }
 }

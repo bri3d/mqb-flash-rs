@@ -5,6 +5,7 @@
 //! The checksum covers all data except the 2-byte checksum and 8 preceding header bytes.
 
 use std::borrow::Cow;
+use mqb_bytes::{read_u16_le, write_u16_le};
 use mqb_modules::{ChecksumState, FlashInfo};
 
 /// Validate (and optionally fix) a Haldex block 16-bit checksum.
@@ -25,13 +26,13 @@ pub fn validate_haldex<'a>(
 
     // Read current checksum at +0x8
     let stored_offset = checksum_location + 0x08;
-    let stored = u16::from_le_bytes([data[stored_offset], data[stored_offset + 1]]);
+    let stored = read_u16_le(data, stored_offset);
 
     // Sum all u16 LE words, excluding the checksum block region [checksum_location .. checksum_location + 0xA]
     let mut sum: u16 = 0;
     for chunk in data[..checksum_location].chunks(2).chain(data[checksum_location + 0xA..].chunks(2)) {
         if chunk.len() == 2 {
-            let word = u16::from_le_bytes([chunk[0], chunk[1]]);
+            let word = read_u16_le(chunk, 0);
             sum = sum.wrapping_add(word);
         }
     }
@@ -42,9 +43,7 @@ pub fn validate_haldex<'a>(
         (ChecksumState::Valid, Cow::Borrowed(data))
     } else if fix {
         let mut fixed = data.to_vec();
-        let bytes = calculated.to_le_bytes();
-        fixed[stored_offset] = bytes[0];
-        fixed[stored_offset + 1] = bytes[1];
+        write_u16_le(&mut fixed, stored_offset, calculated);
         (ChecksumState::Fixed, Cow::Owned(fixed))
     } else {
         (ChecksumState::Invalid, Cow::Borrowed(data))

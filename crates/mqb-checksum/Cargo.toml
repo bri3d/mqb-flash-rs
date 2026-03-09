@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "Checksum algorithms for VW ECU flash blocks"
 
 [dependencies]
+mqb-bytes.workspace = true
 mqb-modules.workspace = true
 crc32fast.workspace = true
 thiserror.workspace = true

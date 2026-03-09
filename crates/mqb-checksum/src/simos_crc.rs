@@ -3,6 +3,7 @@
 //! This is NOT the same as the standard zlib CRC32
 
 use std::borrow::Cow;
+use mqb_bytes::{read_u32_le, write_u32_le};
 use mqb_modules::{ChecksumState, FlashInfo};
 
 /// CRC table generated for poly 0x04C11DB7, MSB-first (non-reflected).
@@ -78,12 +79,7 @@ pub fn validate_simos<'a>(
         return (ChecksumState::Failed, Cow::Borrowed(data));
     };
 
-    let stored = u32::from_le_bytes([
-        data[checksum_loc + 4],
-        data[checksum_loc + 5],
-        data[checksum_loc + 6],
-        data[checksum_loc + 7],
-    ]);
+    let stored = read_u32_le(data, checksum_loc + 4);
     let area_count = data[checksum_loc + 8] as usize;
 
     let addr_table_end = checksum_loc + 12 + area_count * 2 * 4;
@@ -94,7 +90,7 @@ pub fn validate_simos<'a>(
     let mut addresses = Vec::with_capacity(area_count * 2);
     for i in 0..area_count * 2 {
         let off = checksum_loc + 12 + i * 4;
-        let abs_addr = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+        let abs_addr = read_u32_le(data, off);
         if abs_addr < base_address {
             return (ChecksumState::Failed, Cow::Borrowed(data));
         }
@@ -115,11 +111,7 @@ pub fn validate_simos<'a>(
         (ChecksumState::Valid, Cow::Borrowed(data))
     } else if fix {
         let mut fixed = data.to_vec();
-        let bytes = calculated.to_le_bytes();
-        fixed[checksum_loc + 4] = bytes[0];
-        fixed[checksum_loc + 5] = bytes[1];
-        fixed[checksum_loc + 6] = bytes[2];
-        fixed[checksum_loc + 7] = bytes[3];
+        write_u32_le(&mut fixed, checksum_loc + 4, calculated);
         (ChecksumState::Fixed, Cow::Owned(fixed))
     } else {
         (ChecksumState::Invalid, Cow::Borrowed(data))

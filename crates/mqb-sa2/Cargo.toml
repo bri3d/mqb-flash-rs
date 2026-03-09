@@ -4,4 +4,6 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "SA2 seed-key bytecode VM for VW ECU security access"
-# No dependencies — pure std computation
+
+[dependencies]
+mqb-bytes.workspace = true

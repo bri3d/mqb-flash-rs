@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/mqb-bytes",
     "crates/mqb-lzss",
     "crates/mqb-frf",
     "crates/mqb-modules",
@@ -25,6 +26,7 @@ rust-version = "1.80"
 
 [workspace.dependencies]
 # Internal
+mqb-bytes    = { path = "crates/mqb-bytes" }
 mqb-lzss     = { path = "crates/mqb-lzss" }
 mqb-frf      = { path = "crates/mqb-frf" }
 mqb-modules  = { path = "crates/mqb-modules" }

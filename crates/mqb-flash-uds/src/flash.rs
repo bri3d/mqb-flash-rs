@@ -395,7 +395,7 @@ async fn run_flash_sequence<T: IsoTpTransport>(
     if seed_bytes.len() < 4 {
         return Err(FlashError::AuthFailed);
     }
-    let seed = u32::from_be_bytes([seed_bytes[0], seed_bytes[1], seed_bytes[2], seed_bytes[3]]);
+    let seed = mqb_bytes::read_u32_be(&seed_bytes, 0);
     let vm  = Sa2Vm::new(flash_info.sa2_script);
     let key  = vm.execute(seed);
     tracing::debug!("SA2: seed=0x{seed:08X}, key=0x{key:08X}");

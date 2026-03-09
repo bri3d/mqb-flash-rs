@@ -16,6 +16,7 @@ libloading   = { version = "0.8", optional = true }
 winreg        = { version = "0.10", optional = true }
 hex           = { workspace = true, optional = true }
 async-stream  = { version = "0.3", optional = true }
+mqb-bytes.workspace = true
 mqb-lzss.workspace = true
 mqb-modules.workspace = true
 mqb-sa2.workspace = true

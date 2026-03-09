@@ -20,6 +20,8 @@
 //! | 0x93 | add    | 4 bytes BE | accumulator += operand; carry set on overflow    |
 //! | 0x4C | finish | –          | Return accumulator as result                     |
 
+use mqb_bytes::read_u32_be;
+
 /// Maximum instructions executed before the VM aborts (guards against infinite loops).
 const MAX_INSTRUCTIONS: u32 = 100_000;
 
@@ -162,10 +164,6 @@ impl<'a> Sa2Vm<'a> {
 
         acc
     }
-}
-
-fn read_u32_be(data: &[u8], offset: usize) -> u32 {
-    u32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]])
 }
 
 #[cfg(test)]

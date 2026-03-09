@@ -4,6 +4,7 @@
 //! In newer ECUs, the area addresses are in ASW1; in older ECUs they're in CAL itself.
 
 use std::collections::HashMap;
+use mqb_bytes::{read_u32_le, write_u32_le};
 use mqb_modules::{BlockData, ChecksumState, FlashInfo};
 
 /// CSV database of known CAL versions → ECM3 address ranges.
@@ -62,14 +63,10 @@ pub fn locate_ecm3_with_asw1(
         return None;
     }
 
-    let area_count = u32::from_le_bytes(
-        cal_data[checksum_loc + 16..checksum_loc + 20].try_into().unwrap()
-    ) as usize;
+    let area_count = read_u32_le(cal_data, checksum_loc + 16) as usize;
 
     // Check if addresses are embedded in CAL
-    let cal_address = u32::from_le_bytes(
-        cal_data[checksum_loc + 24..checksum_loc + 28].try_into().unwrap()
-    );
+    let cal_address = read_u32_le(cal_data, checksum_loc + 24);
 
     let (addr_data, addr_start) = if cal_address > 0 {
         (cal_data.as_slice(), checksum_loc + 24)
@@ -88,9 +85,7 @@ pub fn locate_ecm3_with_asw1(
         if off + 4 > addr_data.len() {
             return None;
         }
-        let abs_addr = u32::from_le_bytes(
-            addr_data[off..off + 4].try_into().unwrap()
-        ) as i64;
+        let abs_addr = read_u32_le(addr_data, off) as i64;
 
         let offset = abs_addr - base_address;
         let file_offset = if offset < 0 {
@@ -125,14 +120,14 @@ pub fn validate_ecm3(
     }
 
     // Read initial value (the starting seed for the summation)
-    let init_hi = u32::from_le_bytes(cal_data[checksum_loc + 8..checksum_loc + 12].try_into().unwrap()) as u64;
-    let init_lo = u32::from_le_bytes(cal_data[checksum_loc + 12..checksum_loc + 16].try_into().unwrap()) as u64;
+    let init_hi = read_u32_le(cal_data, checksum_loc + 8) as u64;
+    let init_lo = read_u32_le(cal_data, checksum_loc + 12) as u64;
     let mut checksum: u64 = (init_hi << 32) | init_lo;
 
     for pair in addresses.chunks(2) {
         let (start, end) = (pair[0], pair[1]);
         for chunk in cal_data[start..end].chunks_exact(4) {
-            let word = u32::from_le_bytes(chunk.try_into().unwrap()) as u64;
+            let word = read_u32_le(chunk, 0) as u64;
             checksum = checksum.wrapping_add(word);
         }
     }
@@ -144,18 +139,16 @@ pub fn validate_ecm3(
         checksum_loc
     };
 
-    let stored_hi = u32::from_le_bytes(cal_data[actual_checksum_loc..actual_checksum_loc + 4].try_into().unwrap()) as u64;
-    let stored_lo = u32::from_le_bytes(cal_data[actual_checksum_loc + 4..actual_checksum_loc + 8].try_into().unwrap()) as u64;
+    let stored_hi = read_u32_le(cal_data, actual_checksum_loc) as u64;
+    let stored_lo = read_u32_le(cal_data, actual_checksum_loc + 4) as u64;
     let stored: u64 = (stored_hi << 32) | stored_lo;
 
     if checksum == stored {
         (ChecksumState::Valid, cal_data.to_vec())
     } else if fix {
         let mut fixed = cal_data.to_vec();
-        let hi = ((checksum >> 32) as u32).to_le_bytes();
-        let lo = (checksum as u32).to_le_bytes();
-        fixed[actual_checksum_loc..actual_checksum_loc + 4].copy_from_slice(&hi);
-        fixed[actual_checksum_loc + 4..actual_checksum_loc + 8].copy_from_slice(&lo);
+        write_u32_le(&mut fixed, actual_checksum_loc, (checksum >> 32) as u32);
+        write_u32_le(&mut fixed, actual_checksum_loc + 4, checksum as u32);
         (ChecksumState::Fixed, fixed)
     } else {
         (ChecksumState::Invalid, cal_data.to_vec())

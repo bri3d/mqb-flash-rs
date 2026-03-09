@@ -5,6 +5,7 @@
 //! Addresses are subtracted from the block's base address to get file offsets.
 
 use std::borrow::Cow;
+use mqb_bytes::{read_u32_be, write_u32_be};
 use mqb_modules::ChecksumState;
 
 /// Validate (and optionally fix) a DQ381 block CRC32 checksum.
@@ -24,25 +25,9 @@ pub fn validate_dq381<'a>(
         return (ChecksumState::Failed, Cow::Borrowed(data));
     }
 
-    let stored = u32::from_be_bytes([
-        data[checksum_location],
-        data[checksum_location + 1],
-        data[checksum_location + 2],
-        data[checksum_location + 3],
-    ]);
-
-    let abs_start = u32::from_be_bytes([
-        data[start_location],
-        data[start_location + 1],
-        data[start_location + 2],
-        data[start_location + 3],
-    ]);
-    let abs_end = u32::from_be_bytes([
-        data[end_location],
-        data[end_location + 1],
-        data[end_location + 2],
-        data[end_location + 3],
-    ]);
+    let stored = read_u32_be(data, checksum_location);
+    let abs_start = read_u32_be(data, start_location);
+    let abs_end = read_u32_be(data, end_location);
 
     if abs_start < base_address || abs_end < base_address || abs_end < abs_start {
         return (ChecksumState::Failed, Cow::Borrowed(data));
@@ -61,8 +46,7 @@ pub fn validate_dq381<'a>(
         (ChecksumState::Valid, Cow::Borrowed(data))
     } else if fix {
         let mut fixed = data.to_vec();
-        let bytes = calculated.to_be_bytes();
-        fixed[checksum_location..checksum_location + 4].copy_from_slice(&bytes);
+        write_u32_be(&mut fixed, checksum_location, calculated);
         (ChecksumState::Fixed, Cow::Owned(fixed))
     } else {
         (ChecksumState::Invalid, Cow::Borrowed(data))

@@ -30,7 +30,7 @@ pub fn decompress_legacy(input: &[u8]) -> Vec<u8> {
     let offset_size = input[1] as u32;
     let dict_size = fill_bits(input[2]);
     // block_size at bytes 3..7 big-endian
-    let block_size = u32::from_be_bytes([input[3], input[4], input[5], input[6]]) as usize;
+    let block_size = mqb_bytes::read_u32_be(input, 3) as usize;
 
     let mut output = vec![0u8; block_size];
     let mut output_cursor = 0usize;
@@ -46,8 +46,7 @@ pub fn decompress_legacy(input: &[u8]) -> Vec<u8> {
             if cursor + 1 >= input.len() {
                 break;
             }
-            let offset_and_len =
-                u16::from_be_bytes([input[cursor], input[cursor + 1]]);
+            let offset_and_len = mqb_bytes::read_u16_be(input, cursor);
             cursor += 2;
 
             let offset = (offset_and_len >> (16 - offset_size)) as usize;

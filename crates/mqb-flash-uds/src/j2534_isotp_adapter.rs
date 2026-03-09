@@ -492,7 +492,7 @@ fn isotp_rx_thread(
                 tracing::debug!(
                     src_id = format_args!(
                         "{:08X}",
-                        u32::from_be_bytes([msg.data[0], msg.data[1], msg.data[2], msg.data[3]])
+                        mqb_bytes::read_u32_be(&msg.data, 0)
                     ),
                     len = pdu.len(),
                     payload = %hex::encode(&pdu[..pdu.len().min(16)]),

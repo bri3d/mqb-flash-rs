@@ -1,5 +1,6 @@
 //! Read CHARACTERISTIC values from ECU binary data using A2L definitions.
 
+use mqb_bytes::*;
 use crate::types::*;
 
 /// Address mapping entry: `(ecu_base_address, binary_file_offset, block_length)`.
@@ -467,18 +468,17 @@ fn read_inline(
 fn read_raw(data: &[u8], offset: usize, dt: DataType) -> Option<f64> {
     let w = dt.byte_width();
     if offset + w > data.len() { return None; }
-    let b = &data[offset..offset + w];
     Some(match dt {
-        DataType::UByte => b[0] as f64,
-        DataType::SByte => b[0] as i8 as f64,
-        DataType::UWord => u16::from_le_bytes([b[0], b[1]]) as f64,
-        DataType::SWord => i16::from_le_bytes([b[0], b[1]]) as f64,
-        DataType::ULong => u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64,
-        DataType::SLong => i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64,
-        DataType::Float32Ieee => f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64,
-        DataType::Float64Ieee => f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
-        DataType::AUint64 => u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as f64,
-        DataType::AInt64 => i64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as f64,
+        DataType::UByte => data[offset] as f64,
+        DataType::SByte => data[offset] as i8 as f64,
+        DataType::UWord => read_u16_le(data, offset) as f64,
+        DataType::SWord => read_i16_le(data, offset) as f64,
+        DataType::ULong => read_u32_le(data, offset) as f64,
+        DataType::SLong => read_i32_le(data, offset) as f64,
+        DataType::Float32Ieee => read_f32_le(data, offset) as f64,
+        DataType::Float64Ieee => read_f64_le(data, offset),
+        DataType::AUint64 => read_u64_le(data, offset) as f64,
+        DataType::AInt64 => read_i64_le(data, offset) as f64,
     })
 }
 

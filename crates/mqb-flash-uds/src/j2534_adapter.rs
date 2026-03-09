@@ -505,9 +505,7 @@ fn can_rx_thread(
                         "J2534 RX skipped (frame too short)"
                     );
                 } else {
-                    let arb_id = u32::from_be_bytes([
-                        msg.data[0], msg.data[1], msg.data[2], msg.data[3],
-                    ]);
+                    let arb_id = mqb_bytes::read_u32_be(&msg.data, 0);
                     let data = msg.data[4..len].to_vec();
                     tracing::debug!(
                         id = format_args!("{arb_id:08X}"),

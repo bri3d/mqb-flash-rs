@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+mqb-bytes.workspace = true
 thiserror = { workspace = true }
 
 [[bin]]
