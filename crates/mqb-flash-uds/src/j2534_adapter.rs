@@ -431,31 +431,26 @@ fn can_tx_thread(
     bcast: broadcast::Sender<J2534CanEvt>,
     stop_rx: Arc<AtomicBool>,
 ) {
-    loop {
-        match rx_cmds.recv() {
-            Ok(J2534Cmd::Send { arb_id, data }) => {
-                tracing::debug!(
-                    id = format_args!("{arb_id:08X}"),
-                    payload = %hex::encode(&data),
-                    "J2534 TX"
-                );
-                let mut msg = PassThruMsg::new(PROTOCOL_CAN, arb_id, &data);
-                let mut count: u32 = 1;
-                // 100 ms timeout: short enough that Drop's PassThruDisconnect
-                // will interrupt us promptly.
-                let ret = unsafe { write(channel_id, &mut msg, &mut count, 100) };
-                tracing::trace!(ret = j2534_common::status_str(ret), count, "PassThruWriteMsgs");
-                if ret == STATUS_NOERROR {
-                    // Software loopback: hardware loopback is unreliable on many adapters.
-                    bcast.send(J2534CanEvt::Frame { arb_id, data, loopback: true }).ok();
-                } else {
-                    tracing::debug!(
-                        ret = j2534_common::status_str(ret),
-                        "J2534 TX error (channel may be disconnected)"
-                    );
-                }
-            }
-            Err(_) => break, // tx_cmd dropped
+    while let Ok(J2534Cmd::Send { arb_id, data }) = rx_cmds.recv() {
+        tracing::debug!(
+            id = format_args!("{arb_id:08X}"),
+            payload = %hex::encode(&data),
+            "J2534 TX"
+        );
+        let mut msg = PassThruMsg::new(PROTOCOL_CAN, arb_id, &data);
+        let mut count: u32 = 1;
+        // 100 ms timeout: short enough that Drop's PassThruDisconnect
+        // will interrupt us promptly.
+        let ret = unsafe { write(channel_id, &mut msg, &mut count, 100) };
+        tracing::trace!(ret = j2534_common::status_str(ret), count, "PassThruWriteMsgs");
+        if ret == STATUS_NOERROR {
+            // Software loopback: hardware loopback is unreliable on many adapters.
+            bcast.send(J2534CanEvt::Frame { arb_id, data, loopback: true }).ok();
+        } else {
+            tracing::debug!(
+                ret = j2534_common::status_str(ret),
+                "J2534 TX error (channel may be disconnected)"
+            );
         }
     }
     // Tell the RX thread to stop.

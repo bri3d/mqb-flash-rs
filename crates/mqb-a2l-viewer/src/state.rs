@@ -110,9 +110,8 @@ impl State {
                     if !in_cat { return false; }
                 }
                 // Changed-only filter
-                if self.show_changed_only && !self.changed_set.is_empty() {
-                    if !self.changed_set.contains(i) { return false; }
-                }
+                if self.show_changed_only && !self.changed_set.is_empty()
+                    && !self.changed_set.contains(i) { return false; }
                 // Text filter
                 filt.is_empty()
                     || c.name.to_lowercase().contains(&filt)

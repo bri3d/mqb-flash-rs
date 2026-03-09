@@ -67,6 +67,7 @@ enum EditTarget {
 
 const MAX_DISPLAY: usize = 500;
 
+#[derive(Default)]
 struct State {
     // A2L
     a2l_path: Option<PathBuf>,
@@ -91,25 +92,6 @@ struct State {
     editing: Option<(EditTarget, String)>,
 }
 
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            a2l_path: None,
-            a2l: None,
-            loading_a2l: false,
-            a2l_error: None,
-            a2l_addr_index: HashMap::new(),
-            filter: String::new(),
-            filtered: Vec::new(),
-            total_matches: 0,
-            csv_path: None,
-            csv_items: Vec::new(),
-            loading_csv: false,
-            csv_error: None,
-            editing: None,
-        }
-    }
-}
 
 impl State {
     fn rebuild_filter(&mut self) {

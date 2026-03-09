@@ -18,6 +18,33 @@ impl AesCrypto {
     }
 }
 
+impl BlockCrypto for AesCrypto {
+    fn encrypt(&self, data: &[u8]) -> Vec<u8> {
+        // Pad to block boundary
+        let pad_len = (16 - data.len() % 16) % 16;
+        let mut buf = data.to_vec();
+        buf.extend(std::iter::repeat(0u8).take(pad_len));
+
+        let enc = Encryptor::<Aes128>::new_from_slices(&self.key, &self.iv)
+            .expect("valid key/iv length");
+        let out_len = buf.len();
+        let encrypted = enc
+            .encrypt_padded_mut::<NoPadding>(&mut buf, out_len)
+            .expect("encryption failed");
+        encrypted.to_vec()
+    }
+
+    fn decrypt(&self, data: &[u8]) -> Vec<u8> {
+        let mut buf = data.to_vec();
+        let dec = Decryptor::<Aes128>::new_from_slices(&self.key, &self.iv)
+            .expect("valid key/iv length");
+        let decrypted = dec
+            .decrypt_padded_mut::<NoPadding>(&mut buf)
+            .expect("decryption failed");
+        decrypted.to_vec()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -50,32 +77,5 @@ mod tests {
         let plaintext = vec![0x55u8; 17]; // not aligned
         let encrypted = crypto.encrypt(&plaintext);
         assert_eq!(encrypted.len(), 32); // padded to next 16-byte boundary
-    }
-}
-
-impl BlockCrypto for AesCrypto {
-    fn encrypt(&self, data: &[u8]) -> Vec<u8> {
-        // Pad to block boundary
-        let pad_len = (16 - data.len() % 16) % 16;
-        let mut buf = data.to_vec();
-        buf.extend(std::iter::repeat(0u8).take(pad_len));
-
-        let enc = Encryptor::<Aes128>::new_from_slices(&self.key, &self.iv)
-            .expect("valid key/iv length");
-        let out_len = buf.len();
-        let encrypted = enc
-            .encrypt_padded_mut::<NoPadding>(&mut buf, out_len)
-            .expect("encryption failed");
-        encrypted.to_vec()
-    }
-
-    fn decrypt(&self, data: &[u8]) -> Vec<u8> {
-        let mut buf = data.to_vec();
-        let dec = Decryptor::<Aes128>::new_from_slices(&self.key, &self.iv)
-            .expect("valid key/iv length");
-        let decrypted = dec
-            .decrypt_padded_mut::<NoPadding>(&mut buf)
-            .expect("decryption failed");
-        decrypted.to_vec()
     }
 }

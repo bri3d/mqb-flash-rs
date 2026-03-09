@@ -120,16 +120,14 @@ pub fn diff_cell_colors(pct_change: f64, theme: &Theme) -> (Color, Color) {
         } else {
             (Color::from_rgb(0.15, 0.15, 0.18), Color::from_rgb(0.6, 0.6, 0.6))
         }
+    } else if pct_change > 0.001 {
+        let bg = Color::from_rgb(1.0, 0.92 - 0.25 * intensity, 0.90 - 0.30 * intensity);
+        (bg, Color::from_rgb(0.1, 0.1, 0.1))
+    } else if pct_change < -0.001 {
+        let bg = Color::from_rgb(0.90 - 0.15 * intensity, 1.0 - 0.05 * intensity, 0.90 - 0.15 * intensity);
+        (bg, Color::from_rgb(0.1, 0.1, 0.1))
     } else {
-        if pct_change > 0.001 {
-            let bg = Color::from_rgb(1.0, 0.92 - 0.25 * intensity, 0.90 - 0.30 * intensity);
-            (bg, Color::from_rgb(0.1, 0.1, 0.1))
-        } else if pct_change < -0.001 {
-            let bg = Color::from_rgb(0.90 - 0.15 * intensity, 1.0 - 0.05 * intensity, 0.90 - 0.15 * intensity);
-            (bg, Color::from_rgb(0.1, 0.1, 0.1))
-        } else {
-            (Color::from_rgb(0.96, 0.96, 0.96), Color::from_rgb(0.4, 0.4, 0.4))
-        }
+        (Color::from_rgb(0.96, 0.96, 0.96), Color::from_rgb(0.4, 0.4, 0.4))
     }
 }
 

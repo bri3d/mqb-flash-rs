@@ -4,6 +4,20 @@ use super::BlockCrypto;
 
 pub struct SimosXorCrypto;
 
+impl BlockCrypto for SimosXorCrypto {
+    fn encrypt(&self, data: &[u8]) -> Vec<u8> {
+        data.iter()
+            .enumerate()
+            .map(|(i, &b)| b ^ (i as u8))
+            .collect()
+    }
+
+    fn decrypt(&self, data: &[u8]) -> Vec<u8> {
+        // Symmetric
+        self.encrypt(data)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -25,19 +39,5 @@ mod tests {
         let input = vec![0x00u8, 0xFF, 0xAA];
         let out = crypto.encrypt(&input);
         assert_eq!(out, vec![0x00, 0xFE, 0xA8]);
-    }
-}
-
-impl BlockCrypto for SimosXorCrypto {
-    fn encrypt(&self, data: &[u8]) -> Vec<u8> {
-        data.iter()
-            .enumerate()
-            .map(|(i, &b)| b ^ (i as u8))
-            .collect()
-    }
-
-    fn decrypt(&self, data: &[u8]) -> Vec<u8> {
-        // Symmetric
-        self.encrypt(data)
     }
 }

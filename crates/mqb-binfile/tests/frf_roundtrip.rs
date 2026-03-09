@@ -87,7 +87,7 @@ fn assert_all_valid(frf_path: &str, flash_info: &'static FlashInfo) {
     assert_eq!(state, ChecksumState::Valid, "{frf_path}: ECM3 checksum is invalid");
 }
 
-fn apply_cboot_patch_and_fix(bin: &mut Vec<u8>, flash_info: &'static FlashInfo) {
+fn apply_cboot_patch_and_fix(bin: &mut [u8], flash_info: &'static FlashInfo) {
     let block_num = flash_info.block_to_number("CBOOT").expect("module has a CBOOT block");
     let offset = flash_info.binfile_offset(block_num).expect("CBOOT has a binfile offset");
     let length = flash_info.block_length(block_num).expect("CBOOT has a block length");

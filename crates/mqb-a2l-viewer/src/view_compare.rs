@@ -344,6 +344,7 @@ fn view_compare_curve<'a>(
     col.into()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn view_compare_map<'a>(
     x1: &'a [f64], y1: &'a [f64], z1: &'a [Vec<f64>],
     x2: &'a [f64], y2: &'a [f64], z2: &'a [Vec<f64>],
