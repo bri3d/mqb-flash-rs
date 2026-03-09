@@ -1,0 +1,15 @@
+[package]
+name = "mqb-a2l-viewer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "iced GUI for viewing A2L CHARACTERISTIC data from ECU firmware"
+
+[[bin]]
+name = "mqb-a2l-viewer"
+path = "src/main.rs"
+
+[dependencies]
+mqb-a2l = { workspace = true }
+iced    = { workspace = true }
+rfd     = { workspace = true }

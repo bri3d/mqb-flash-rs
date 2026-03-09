@@ -1,0 +1,11 @@
+[package]
+name = "mqb-lzss"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "LZSS algorithms for VW ECU firmware: Okumura, LZSS10, and LegacySimos"
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]

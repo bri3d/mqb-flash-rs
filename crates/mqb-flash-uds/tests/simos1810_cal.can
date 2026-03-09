@@ -1,0 +1,91 @@
+# Simos18.10 CAL-only flash sequence integration test fixture.
+#
+# Seed 0x80551824 -> key 0x4835B093 computed by the simos18.10 SA2 script.
+# (The captured session was from a simos18.1 ECU which uses a different script.)
+#
+# Block lengths and identifiers match S1810_FLASH_INFO (FlashInfo in vw-modules).
+# Workshop code is FlashOptions default: 20 04 20 42 04 20 42 b1 3d
+# CAL block (5) length: 0x9FC00 = 654336 bytes (-> 00 09 fc 00 in RequestDownload)
+# Transfer chunk: 4093 bytes (BLOCK_TRANSFER_SIZES_SIMOS[5] = 0xFFD, capped by ECU max 0x0FFF)
+# Synthetic PreparedBlockData uses 4093 bytes of zeros (1 full chunk).
+#
+# T 7E0 = tester -> ECU  |  R 7E8 = ECU -> tester
+# UDS PDU bytes only (no ISO-TP length/SN headers).
+# TransferData (SID 36) is handled automatically by FakeCanAdapter.
+
+# 1. Extended diagnostic session
+T 7E0 10 03
+R 7E8 50 03 00 32 01 f4
+
+# 2. Read VIN (20-byte response, FakeCanAdapter will fragment into ISO-TP)
+T 7E0 22 f1 90
+R 7E8 62 f1 90 57 56 57 55 46 37 41 55 32 47 57 39 38 37 36 35 30
+
+# 3. Check programming precondition (routine 0x0203)
+T 7E0 31 01 02 03
+R 7E8 71 01 02 03
+
+# 4. TesterPresent
+T 7E0 3e 00
+R 7E8 7e 00
+
+# 5. Upgrade to programming session
+T 7E0 10 02
+R 7E8 50 02 00 32 01 f4
+
+# 6. TesterPresent
+T 7E0 3e 00
+R 7E8 7e 00
+
+# 7. Security access — key computed by simos18.10 SA2 script for this seed
+T 7E0 27 11
+R 7E8 67 11 80 55 18 24
+T 7E0 27 12 48 35 b0 93
+R 7E8 67 12
+
+# 8. TesterPresent
+T 7E0 3e 00
+R 7E8 7e 00
+
+# 9. Write workshop code to DID 0xF15A (12-byte message, multi-frame)
+T 7E0 2e f1 5a 20 04 20 42 04 20 42 b1 3d
+R 7E8 6e f1 5a
+
+# 10. TesterPresent
+T 7E0 3e 00
+R 7E8 7e 00
+
+# 11. Flash CAL (block 5)
+
+# 11a. Erase (routine 0xFF00, data = [0x01, block_id=0x05])
+T 7E0 31 01 ff 00 01 05
+R 7E8 71 01 ff 00 00
+
+# 11b. RequestDownload: compression=0xA, encryption=0xA, addr=05, size=0x9FC00
+T 7E0 34 aa 41 05 00 09 fc 00
+R 7E8 74 20 0f ff
+
+# 11c. TransferData (1 chunk of 4093 zero bytes) — handled automatically
+
+# 11d. RequestTransferExit
+T 7E0 37
+R 7E8 77
+
+# 11e. Checksum routine 0x0202: data = [0x01, block_id, 0x00, 0x04, uds_checksum[4]]
+T 7E0 31 01 02 02 01 05 00 04 00 00 00 00
+R 7E8 71 01 02 02 00
+
+# 11f. TesterPresent (after block — sent by run_flash_sequence loop)
+T 7E0 3e 00
+R 7E8 7e 00
+
+# 12. Verify programming dependencies (routine 0xFF01)
+T 7E0 31 01 ff 01
+R 7E8 71 01 ff 01 00
+
+# 13. TesterPresent
+T 7E0 3e 00
+R 7E8 7e 00
+
+# 14. ECUReset — no response (ECU hard-resets immediately; timeout is expected and OK)
+T 7E0 11 01

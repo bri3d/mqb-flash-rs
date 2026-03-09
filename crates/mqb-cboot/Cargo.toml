@@ -1,0 +1,9 @@
+[package]
+name = "mqb-cboot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "CBOOT sample-mode patch for VW/Audi Simos ECUs"
+
+[dependencies]
+thiserror.workspace = true

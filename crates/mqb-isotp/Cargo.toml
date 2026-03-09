@@ -1,0 +1,9 @@
+[package]
+name = "mqb-isotp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "ISO-TP (ISO 15765-2) CAN frame codec"
+
+[dependencies]
+automotive.workspace = true

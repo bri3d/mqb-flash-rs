@@ -1,0 +1,18 @@
+[package]
+name = "mqb-binfile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Binary file splitting and combining for VW ECU flash images"
+
+[dependencies]
+mqb-modules.workspace = true
+mqb-frf.workspace = true
+mqb-odx.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+mqb-checksum.workspace = true
+mqb-cboot.workspace = true

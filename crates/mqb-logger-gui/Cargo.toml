@@ -1,0 +1,16 @@
+[package]
+name = "mqb-logger-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "iced GUI for VW ECU data logging"
+
+[[bin]]
+name = "mqb-logger-gui"
+path = "src/main.rs"
+
+[dependencies]
+mqb-a2l    = { workspace = true }
+iced       = { workspace = true }
+rfd        = { workspace = true }
+tokio      = { workspace = true }

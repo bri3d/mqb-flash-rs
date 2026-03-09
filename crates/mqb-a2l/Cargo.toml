@@ -1,0 +1,16 @@
+[package]
+name = "mqb-a2l"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+[[bin]]
+name = "parse_a2l"
+path = "src/bin/parse_a2l.rs"
+
+[[bin]]
+name = "read_chars"
+path = "src/bin/read_chars.rs"

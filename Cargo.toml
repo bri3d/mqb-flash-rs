@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mqb-lzss",
+    "crates/mqb-frf",
+    "crates/mqb-modules",
+    "crates/mqb-odx",
+    "crates/mqb-binfile",
+    "crates/mqb-checksum",
+    "crates/mqb-sa2",
+    "crates/mqb-isotp",
+    "crates/mqb-cboot",
+    "crates/mqb-flash-uds",
+    "crates/mqb-flash-cli",
+    "crates/mqb-flash-gui",
+    "crates/mqb-a2l",
+    "crates/mqb-a2l-viewer",
+    "crates/mqb-logger-gui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# Internal
+mqb-lzss     = { path = "crates/mqb-lzss" }
+mqb-frf      = { path = "crates/mqb-frf" }
+mqb-modules  = { path = "crates/mqb-modules" }
+mqb-odx      = { path = "crates/mqb-odx" }
+mqb-binfile  = { path = "crates/mqb-binfile" }
+mqb-checksum = { path = "crates/mqb-checksum" }
+mqb-sa2      = { path = "crates/mqb-sa2" }
+mqb-isotp    = { path = "crates/mqb-isotp" }
+mqb-cboot    = { path = "crates/mqb-cboot" }
+mqb-flash-uds = { path = "crates/mqb-flash-uds" }
+mqb-a2l       = { path = "crates/mqb-a2l" }
+
+# External
+automotive  = { version = "0.3", default-features = false, features = ["panda"] }
+zip         = "2"
+aes         = "0.8"
+cbc         = { version = "0.1", features = ["alloc"] }
+cipher      = "0.4"
+roxmltree   = "0.19"
+hex         = "0.4"
+crc32fast   = "1"
+tokio       = { version = "1", features = ["full"] }
+thiserror   = "1"
+anyhow      = "1"
+clap        = { version = "4", features = ["derive"] }
+indicatif   = "0.17"
+tracing     = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+iced        = { version = "0.13", features = ["tokio"] }
+rfd         = "0.15"
+
+[patch.crates-io]
+# automotive 0.3.0 uses `(1 << 32) - 1` for a usize constant, which overflows
+# on 32-bit targets. Patched locally until upstream fixes it.
+automotive = { path = "vendor/automotive" }

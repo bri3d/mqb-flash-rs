@@ -1,0 +1,25 @@
+[package]
+name = "mqb-flash-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "CLI tool for VW ECU flashing"
+
+[[bin]]
+name = "mqb-flash"
+path = "src/main.rs"
+
+[dependencies]
+mqb-frf.workspace = true
+mqb-modules.workspace = true
+mqb-cboot.workspace = true
+mqb-odx.workspace = true
+mqb-binfile.workspace = true
+mqb-checksum.workspace = true
+mqb-flash-uds = { workspace = true, features = ["j2534"] }
+clap.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+indicatif.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,30 @@
+[package]
+name = "mqb-flash-uds"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "SA2 VM, UDS session management, and ECU flashing over CAN"
+
+[features]
+# Enable SocketCAN support (Linux only; requires the `automotive/socketcan` feature)
+socketcan = ["automotive/socketcan"]
+# Enable SAE J2534 PassThru support (Windows)
+j2534 = ["dep:libloading", "dep:winreg", "dep:hex", "dep:async-stream"]
+
+[dependencies]
+libloading   = { version = "0.8", optional = true }
+winreg        = { version = "0.10", optional = true }
+hex           = { workspace = true, optional = true }
+async-stream  = { version = "0.3", optional = true }
+mqb-lzss.workspace = true
+mqb-modules.workspace = true
+mqb-sa2.workspace = true
+mqb-isotp.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+automotive.workspace = true
+
+[dev-dependencies]
+mqb-modules.workspace = true
+tracing-subscriber.workspace = true

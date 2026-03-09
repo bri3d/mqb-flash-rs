@@ -1,0 +1,11 @@
+[package]
+name = "mqb-checksum"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Checksum algorithms for VW ECU flash blocks"
+
+[dependencies]
+mqb-modules.workspace = true
+crc32fast.workspace = true
+thiserror.workspace = true

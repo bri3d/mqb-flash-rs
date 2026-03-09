@@ -1,0 +1,77 @@
+//! Simos18.1 / 18.6 ECU flash configuration.
+
+use crate::crypto::AesCrypto;
+use crate::types::{ChecksumKind, FlashInfo, PatchInfo, ECU_CONTROL_MODULE_IDENTIFIER};
+
+const S18_PATCH_BYTES: &[u8] = include_bytes!("../../../../data/patch.bin");
+use super::{
+    BLOCK_CHECKSUMS_SIMOS, BLOCK_IDENTIFIERS_SIMOS, BLOCK_NAME_TO_NUMBER_SIMOS,
+    BLOCK_TRANSFER_SIZES_SIMOS, BOX_CODE_LOCATION_SIMOS, CHECKSUM_BLOCK_LOCATION_SIMOS,
+    SOFTWARE_VERSION_LOCATION_SIMOS,
+};
+
+static S18_CRYPTO: AesCrypto = AesCrypto::new(
+    [0x98, 0xD3, 0x12, 0x02, 0xE4, 0x8E, 0x38, 0x54, 0xF2, 0xCA, 0x56, 0x15, 0x45, 0xBA, 0x6F, 0x2F],
+    [0xE7, 0x86, 0x12, 0x78, 0xC5, 0x08, 0x53, 0x27, 0x98, 0xBC, 0xA4, 0xFE, 0x45, 0x1D, 0x20, 0xD1],
+);
+
+const SA2_SCRIPT: &[u8] = &[
+    0x68, 0x02, 0x81, 0x4A, 0x10, 0x68, 0x04, 0x93, 0x08, 0x08, 0x20, 0x09, 0x4A, 0x05, 0x87,
+    0x22, 0x12, 0x19, 0x54, 0x82, 0x49, 0x93, 0x07, 0x12, 0x20, 0x11, 0x82, 0x4A, 0x05, 0x87,
+    0x03, 0x11, 0x20, 0x10, 0x82, 0x4A, 0x01, 0x81, 0x49, 0x4C,
+];
+
+const BASE_ADDRESSES: &[(u8, u32)] = &[
+    (0, 0x80000000), (1, 0x8001C000), (2, 0x80040000),
+    (3, 0x80140000), (4, 0x80880000), (5, 0xA0800000), (6, 0x80840000),
+];
+
+const BLOCK_LENGTHS: &[(u8, usize)] = &[
+    (1, 0x23E00), (2, 0xFFC00), (3, 0xBFC00), (4, 0x7FC00), (5, 0x7FC00), (6, 0x23E00),
+];
+
+const BLOCK_NAMES_FRF: &[(u8, &str)] = &[
+    (1, "FD_0"), (2, "FD_1"), (3, "FD_2"), (4, "FD_3"), (5, "FD_4"),
+];
+
+const BINFILE_LAYOUT: &[(u8, usize)] = &[
+    (0, 0x000000), (1, 0x01C000), (2, 0x040000),
+    (3, 0x140000), (4, 0x280000), (5, 0x200000),
+];
+
+fn s18_transfer_size_patch(block_num: u8, address: usize) -> usize {
+    assert_eq!(block_num, 4, "Only Block 4 (ASW3) patching is supported for Simos18");
+    if address < 0x9600 { return 0x100; }
+    if address < 0x9800 { return 0x8; }
+    if address < 0x7DD00 { return 0x100; }
+    if address < 0x7E200 { return 0x8; }
+    if address < 0x7F900 { return 0x100; }
+    0x8
+}
+
+pub static S18_FLASH_INFO: FlashInfo = FlashInfo {
+    base_addresses: BASE_ADDRESSES,
+    block_lengths: BLOCK_LENGTHS,
+    sa2_script: SA2_SCRIPT,
+    block_names_frf: BLOCK_NAMES_FRF,
+    block_identifiers: BLOCK_IDENTIFIERS_SIMOS,
+    block_checksums: BLOCK_CHECKSUMS_SIMOS,
+    control_module_identifier: ECU_CONTROL_MODULE_IDENTIFIER,
+    software_version_location: SOFTWARE_VERSION_LOCATION_SIMOS,
+    box_code_location: BOX_CODE_LOCATION_SIMOS,
+    block_transfer_sizes: BLOCK_TRANSFER_SIZES_SIMOS,
+    binfile_layout: BINFILE_LAYOUT,
+    binfile_size: 4_194_304,
+    project_name: "SC8",
+    crypto: &S18_CRYPTO,
+    block_name_to_number: BLOCK_NAME_TO_NUMBER_SIMOS,
+    checksum_block_location: CHECKSUM_BLOCK_LOCATION_SIMOS,
+    patch_info: Some(PatchInfo {
+        patch_box_code: "8V0906259H__0001",
+        patch_block_index: 4,
+        patch_bytes: S18_PATCH_BYTES,
+        block_transfer_size_fn: s18_transfer_size_patch,
+    }),
+    checksum_kind: ChecksumKind::Simos,
+    lzss10_odx: false,
+};

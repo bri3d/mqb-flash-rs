@@ -1,0 +1,12 @@
+[package]
+name = "mqb-modules"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Shared types, crypto implementations, and per-ECU flash configs"
+
+[dependencies]
+aes.workspace = true
+cbc.workspace = true
+cipher.workspace = true
+thiserror.workspace = true

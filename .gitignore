@@ -1,0 +1,32 @@
+# Rust build artifacts
+/target/
+
+# Distribution binaries
+/dist/
+
+# Binary firmware files (large, proprietary)
+*.bin
+*.frf
+*.odx
+*.a2l
+*.flashable_block*
+
+# Session logs / debug logs
+*.log
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store

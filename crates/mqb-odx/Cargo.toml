@@ -1,0 +1,13 @@
+[package]
+name = "mqb-odx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "ODX XML parsing, decryption, and decompression"
+
+[dependencies]
+mqb-lzss.workspace = true
+mqb-modules.workspace = true
+roxmltree.workspace = true
+hex.workspace = true
+thiserror.workspace = true

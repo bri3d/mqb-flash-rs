@@ -1,0 +1,23 @@
+[package]
+name = "mqb-flash-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "iced GUI for VW ECU flashing"
+
+[[bin]]
+name = "mqb-flash-gui"
+path = "src/main.rs"
+
+[dependencies]
+iced           = { workspace = true }
+rfd            = { workspace = true }
+mqb-flash-uds  = { workspace = true, features = ["j2534"] }
+mqb-modules    = { workspace = true }
+mqb-binfile    = { workspace = true }
+mqb-checksum   = { workspace = true }
+mqb-cboot      = { workspace = true }
+tokio          = { workspace = true }
+anyhow         = { workspace = true }
+tracing        = { workspace = true }
+tracing-subscriber = { workspace = true }

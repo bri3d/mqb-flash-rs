@@ -1,0 +1,10 @@
+[package]
+name = "mqb-frf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "FRF file decryption and ZIP extraction"
+
+[dependencies]
+zip.workspace = true
+thiserror.workspace = true
