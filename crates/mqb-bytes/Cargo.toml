@@ -1,0 +1,7 @@
+[package]
+name = "mqb-bytes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Inline helpers for reading/writing integers from byte slices"
+# No dependencies — pure std
