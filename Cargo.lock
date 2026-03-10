@@ -2371,6 +2371,7 @@ dependencies = [
  "mqb-cboot",
  "mqb-checksum",
  "mqb-frf",
+ "mqb-lzss",
  "mqb-modules",
  "mqb-odx",
  "thiserror 1.0.69",

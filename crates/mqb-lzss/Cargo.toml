@@ -3,7 +3,7 @@ name = "mqb-lzss"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "LZSS algorithms for VW ECU firmware: Okumura, LZSS10, and LegacySimos"
+description = "LZSS algorithms for VW ECU firmware: Storer-Szymanski, LZSS10, and LegacySimos"
 
 [dependencies]
 mqb-bytes.workspace = true
