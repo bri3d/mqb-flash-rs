@@ -12,7 +12,12 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::debug;
 
 const CAN_TX_BUFFER_SIZE: usize = 128;
-const CAN_RX_BUFFER_SIZE: usize = 1024;
+// Must be large enough to absorb all CAN frames generated during a
+// multi-frame ISO-TP transfer without the recv subscriber being polled.
+// A 4 KiB UDS payload at 7 bytes/CF ≈ 585 CFs; each produces a loopback
+// echo plus the real frame.  Back-to-back transfers or mixed TX/RX traffic
+// can double that.  8192 gives ample headroom.
+const CAN_RX_BUFFER_SIZE: usize = 8192;
 const DEBUG: bool = false;
 
 type BusIdentifier = (u8, Identifier);

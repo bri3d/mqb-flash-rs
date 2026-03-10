@@ -16,3 +16,4 @@ anyhow.workspace = true
 [dev-dependencies]
 mqb-checksum.workspace = true
 mqb-cboot.workspace = true
+mqb-lzss.workspace = true

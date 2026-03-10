@@ -19,8 +19,9 @@
 //! Modern J2534 DLLs support concurrent `PassThruReadMsgs` /
 //! `PassThruWriteMsgs` on the same channel; this is a documented precondition.
 //!
-//! [`Drop`] calls `PassThruDisconnect` before joining the threads so that any
-//! in-flight `PassThruWriteMsgs` (up to 60 s) is interrupted promptly.
+//! On [`Drop`], `PassThruDisconnect` is called to interrupt any in-flight DLL
+//! calls, then both threads are joined before `PassThruClose` releases the
+//! device.  This avoids use-after-free in the DLL.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -33,9 +34,8 @@ use tokio::sync::{broadcast, oneshot};
 use automotive::IsoTpTransport;
 
 use crate::j2534_common::{
-    self, FnPassThruConnect, FnPassThruDisconnect, FnPassThruIoctl, FnPassThruClose,
-    FnPassThruOpen, FnPassThruReadMsgs, FnPassThruStartMsgFilter, FnPassThruWriteMsgs,
-    PassThruMsg, STATUS_NOERROR, ERR_BUFFER_EMPTY, ERR_TIMEOUT,
+    self, FnPassThruDisconnect, FnPassThruReadMsgs, FnPassThruWriteMsgs,
+    J2534Device, PassThruMsg, STATUS_NOERROR, ERR_BUFFER_EMPTY, ERR_TIMEOUT,
 };
 
 // ── Protocol / filter constants ────────────────────────────────────────────
@@ -118,24 +118,17 @@ pub struct J2534NativeIsoTpTransport {
     rx_thread: Option<thread::JoinHandle<()>>,
     // ── Cleanup state (used in Drop after threads are joined) ──────────────
     channel_id: u32,
-    device_id: u32,
     pass_thru_disconnect: FnPassThruDisconnect,
-    pass_thru_close: FnPassThruClose,
-    /// Keeps the PassThru DLL loaded for the lifetime of this transport.
-    _lib: libloading::Library,
+    /// Owns the device handle + DLL; `None` after [`into_device`].
+    device: Option<J2534Device>,
 }
 
 impl J2534NativeIsoTpTransport {
     /// Open a J2534 ISO 15765 channel and start the TX/RX background threads.
     ///
-    /// # Parameters
-    /// * `dll_path` — path to the PassThru DLL, or `None` to auto-discover
-    ///   the first 64-bit driver from `HKLM\SOFTWARE\PassThruSupport.04.04`.
-    /// * `bitrate` — CAN bus bitrate in bits/sec (typically `500_000`).
-    /// * `tx_id` — CAN ID for tester-to-ECU frames.
-    /// * `rx_id` — CAN ID for ECU-to-tester frames.
-    /// * `stmin_tx_us` — if `Some(n)`, encodes `n` µs as the ISO 15765-2
-    ///   STmin byte and applies it via `PassThruIoctl(SET_CONFIG, STMIN_TX)`.
+    /// Opens a new device via `PassThruOpen`.  To reuse an already-open
+    /// device (e.g. after an OBD DTC-clear channel), use
+    /// [`open_on_device`](Self::open_on_device) instead.
     pub fn open(
         dll_path: Option<&str>,
         bitrate: u32,
@@ -143,47 +136,32 @@ impl J2534NativeIsoTpTransport {
         rx_id: u32,
         stmin_tx_us: Option<u32>,
     ) -> Result<Self, String> {
-        let path = crate::j2534_adapter::resolve_dll_path(dll_path)?;
+        let device = j2534_common::open_device(dll_path)?;
+        Self::open_on_device(device, bitrate, tx_id, rx_id, stmin_tx_us)
+            .map_err(|(msg, _device)| msg)
+    }
 
-        // ── Load DLL ──────────────────────────────────────────────────────
-        let lib = match unsafe { libloading::Library::new(&path) } {
-            Ok(l) => l,
-            Err(e) => return Err(format!("Cannot load {path}: {e}")),
-        };
-
-        macro_rules! sym {
-            ($name:literal, $ty:ty) => {
-                match unsafe { lib.get::<$ty>($name) } {
-                    Ok(s) => *s,
-                    Err(e) => {
-                        return Err(format!(
-                            "Symbol {} not found in {path}: {e}",
-                            std::str::from_utf8($name).unwrap_or("?")
-                        ));
-                    }
-                }
-            };
-        }
-
-        let pass_thru_open     = sym!(b"PassThruOpen\0",           FnPassThruOpen);
-        let pass_thru_close    = sym!(b"PassThruClose\0",          FnPassThruClose);
-        let pass_thru_connect  = sym!(b"PassThruConnect\0",        FnPassThruConnect);
-        let pass_thru_disconnect = sym!(b"PassThruDisconnect\0",   FnPassThruDisconnect);
-        let pass_thru_read     = sym!(b"PassThruReadMsgs\0",       FnPassThruReadMsgs);
-        let pass_thru_write    = sym!(b"PassThruWriteMsgs\0",      FnPassThruWriteMsgs);
-        let pass_thru_filter   = sym!(b"PassThruStartMsgFilter\0", FnPassThruStartMsgFilter);
-        let pass_thru_ioctl    = sym!(b"PassThruIoctl\0",          FnPassThruIoctl);
-
-        // ── Open device ────────────────────────────────────────────────────
-        let mut device_id: u32 = 0;
-        let ret = unsafe { pass_thru_open(std::ptr::null(), &mut device_id) };
-        tracing::debug!(ret = j2534_common::status_str(ret), device_id, "PassThruOpen");
-        if ret != STATUS_NOERROR {
-            return Err(format!(
-                "PassThruOpen failed: 0x{ret:02X} ({})",
-                j2534_common::status_str(ret)
-            ));
-        }
+    /// Open an ISO 15765 channel on an already-open [`J2534Device`].
+    ///
+    /// This avoids closing and reopening the physical device when switching
+    /// channels (e.g. from OBD DTC-clear to the main flash channel).
+    ///
+    /// On error, the [`J2534Device`] is returned alongside the error message
+    /// so the caller can reuse it.
+    pub(crate) fn open_on_device(
+        device: J2534Device,
+        bitrate: u32,
+        tx_id: u32,
+        rx_id: u32,
+        stmin_tx_us: Option<u32>,
+    ) -> Result<Self, (String, J2534Device)> {
+        let device_id = device.device_id;
+        let pass_thru_connect = device.connect;
+        let pass_thru_disconnect = device.disconnect;
+        let pass_thru_read = device.read;
+        let pass_thru_write = device.write;
+        let pass_thru_filter = device.filter;
+        let pass_thru_ioctl = device.ioctl;
 
         // ── Open ISO 15765 channel ─────────────────────────────────────────
         // Flags = 0: frame padding is controlled per-message via TxFlags.
@@ -198,11 +176,10 @@ impl J2534NativeIsoTpTransport {
             "PassThruConnect ISO15765"
         );
         if ret != STATUS_NOERROR {
-            unsafe { pass_thru_close(device_id) };
-            return Err(format!(
+            return Err((format!(
                 "PassThruConnect (ISO15765, {bitrate} bps) failed: 0x{ret:02X} ({})",
                 j2534_common::status_str(ret)
-            ));
+            ), device));
         }
 
         // ── Set up flow-control filter ─────────────────────────────────────
@@ -236,11 +213,10 @@ impl J2534NativeIsoTpTransport {
         );
         if ret != STATUS_NOERROR {
             unsafe { pass_thru_disconnect(channel_id) };
-            unsafe { pass_thru_close(device_id) };
-            return Err(format!(
+            return Err((format!(
                 "PassThruStartMsgFilter failed: 0x{ret:02X} ({})",
                 j2534_common::status_str(ret)
-            ));
+            ), device));
         }
 
         // ── Clear RX buffer after filter setup ─────────────────────────────
@@ -266,28 +242,31 @@ impl J2534NativeIsoTpTransport {
             "PassThruIoctl SET_CONFIG ISO15765_STMIN=0"
         );
 
-        // ── Optional STMIN_TX ioctl ────────────────────────────────────────
-        if let Some(stmin_us) = stmin_tx_us {
-            let stmin_byte = us_to_stmin_byte(stmin_us) as u32;
-            let ret = j2534_common::set_config(
-                pass_thru_ioctl,
-                channel_id,
-                IOCTL_PARAM_STMIN_TX,
-                stmin_byte,
+        // ── STMIN_TX ioctl ─────────────────────────────────────────────────
+        // Default to 300 µs if no override is provided.  This gives the
+        // receiving ECU (and the software ISO-TP pipeline on the raw-CAN
+        // path) enough breathing room without significantly slowing down
+        // large transfers.
+        let stmin_us = stmin_tx_us.unwrap_or(500);
+        let stmin_byte = us_to_stmin_byte(stmin_us) as u32;
+        let ret = j2534_common::set_config(
+            pass_thru_ioctl,
+            channel_id,
+            IOCTL_PARAM_STMIN_TX,
+            stmin_byte,
+        );
+        tracing::debug!(
+            ret = j2534_common::status_str(ret),
+            stmin_us,
+            stmin_byte,
+            "PassThruIoctl SET_CONFIG STMIN_TX"
+        );
+        if ret != STATUS_NOERROR {
+            tracing::warn!(
+                "STMIN_TX ioctl failed: 0x{ret:02X} ({}) — \
+                 adapter will use its default separation time",
+                j2534_common::status_str(ret)
             );
-            tracing::debug!(
-                ret = j2534_common::status_str(ret),
-                stmin_us,
-                stmin_byte,
-                "PassThruIoctl SET_CONFIG STMIN_TX"
-            );
-            if ret != STATUS_NOERROR {
-                tracing::warn!(
-                    "STMIN_TX ioctl failed: 0x{ret:02X} ({}) — \
-                     adapter will use its default separation time",
-                    j2534_common::status_str(ret)
-                );
-            }
         }
 
         // ── Create channels and spawn threads ─────────────────────────────
@@ -304,7 +283,11 @@ impl J2534NativeIsoTpTransport {
             thread::Builder::new()
                 .name("j2534-isotp-tx".to_owned())
                 .spawn(move || isotp_tx_thread(channel_id, tx_id, pass_thru_write, rx_cmd, bcast, stop))
-                .map_err(|e| format!("Failed to spawn J2534 ISO-TP TX thread: {e}"))?
+                .map_err(|e| format!("Failed to spawn J2534 ISO-TP TX thread: {e}"))
+        };
+        let tx_thread = match tx_thread {
+            Ok(h) => h,
+            Err(e) => return Err((e, device)),
         };
 
         let rx_thread = {
@@ -313,7 +296,11 @@ impl J2534NativeIsoTpTransport {
             thread::Builder::new()
                 .name("j2534-isotp-rx".to_owned())
                 .spawn(move || isotp_rx_thread(channel_id, pass_thru_read, bcast, stop))
-                .map_err(|e| format!("Failed to spawn J2534 ISO-TP RX thread: {e}"))?
+                .map_err(|e| format!("Failed to spawn J2534 ISO-TP RX thread: {e}"))
+        };
+        let rx_thread = match rx_thread {
+            Ok(h) => h,
+            Err(e) => return Err((e, device)),
         };
 
         Ok(Self {
@@ -323,32 +310,48 @@ impl J2534NativeIsoTpTransport {
             tx_thread: Some(tx_thread),
             rx_thread: Some(rx_thread),
             channel_id,
-            device_id,
             pass_thru_disconnect,
-            pass_thru_close,
-            _lib: lib,
+            device: Some(device),
         })
     }
-}
 
-impl Drop for J2534NativeIsoTpTransport {
-    fn drop(&mut self) {
-        // Signal TX thread to stop (its recv() will return Err).
+    /// Disconnect the ISO 15765 channel and return the underlying
+    /// [`J2534Device`] so it can be reused for another channel.
+    ///
+    /// The device remains open — only the channel is torn down.
+    pub(crate) fn into_device(mut self) -> J2534Device {
+        self.shutdown_channel();
+        // Take the device so Drop doesn't close it.
+        self.device.take().expect("device already taken")
+    }
+
+    /// Stop threads and disconnect the channel (shared by Drop and into_device).
+    fn shutdown_channel(&mut self) {
+        // Signal TX thread to stop.
         drop(self.tx_cmd.take());
         // Signal RX thread to stop.
         self.stop_rx.store(true, Ordering::Release);
-        // Disconnect interrupts any in-flight PassThruWriteMsgs (up to 60 s)
-        // so the TX thread exits promptly.
+        // Disconnect invalidates the channel, causing in-flight
+        // PassThruWriteMsgs / PassThruReadMsgs to return an error.
         let ret = unsafe { (self.pass_thru_disconnect)(self.channel_id) };
         tracing::trace!(ret = j2534_common::status_str(ret), "PassThruDisconnect");
-        let ret = unsafe { (self.pass_thru_close)(self.device_id) };
-        tracing::trace!(ret = j2534_common::status_str(ret), "PassThruClose");
+        // Join threads BEFORE PassThruClose — the threads may still be inside
+        // a DLL call that references device-level structures.
         if let Some(h) = self.tx_thread.take() {
             let _ = h.join();
         }
         if let Some(h) = self.rx_thread.take() {
             let _ = h.join();
         }
+    }
+}
+
+impl Drop for J2534NativeIsoTpTransport {
+    fn drop(&mut self) {
+        self.shutdown_channel();
+        // If the device is still owned (i.e. `into_device` was not called),
+        // dropping it here calls PassThruClose.
+        drop(self.device.take());
     }
 }
 
@@ -481,8 +484,13 @@ fn isotp_rx_thread(
                 }
                 // rx_status != 0: TX confirmation / loopback echo — not a received PDU.
                 if msg.rx_status != 0 {
+                    let src_id = mqb_bytes::read_u32_be(&msg.data, 0);
+                    let payload = &msg.data[4..len];
                     tracing::debug!(
                         rx_status = format_args!("0x{:04X}", msg.rx_status),
+                        src_id = format_args!("{src_id:08X}"),
+                        data_size = len - 4,
+                        payload = %hex::encode(&payload[..payload.len().min(16)]),
                         "J2534 ISO15765 skipping non-data frame"
                     );
                     continue;

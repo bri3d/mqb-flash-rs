@@ -5,8 +5,9 @@
 //! channel.  Modern J2534 DLLs support concurrent read/write on the same
 //! channel; this is documented as a precondition for using this adapter.
 //!
-//! Both threads are interrupted promptly on [`Drop`] via `PassThruDisconnect`,
-//! so the adapter tears down in at most one TX-write timeout (100 ms).
+//! On [`Drop`], `PassThruDisconnect` is called first to interrupt any
+//! in-flight DLL calls, then both threads are joined before `PassThruClose`
+//! releases the device.  This avoids use-after-free in the DLL.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -200,18 +201,21 @@ impl Drop for J2534CanAdapter {
         drop(self.tx_cmd.take());
         // Signal RX thread to stop.
         self.stop_rx.store(true, Ordering::Release);
-        // Disconnect interrupts any in-flight PassThruReadMsgs / PassThruWriteMsgs,
-        // so both threads exit promptly instead of waiting for their next timeout.
+        // Disconnect invalidates the channel, causing in-flight
+        // PassThruReadMsgs / PassThruWriteMsgs to return an error.
         let ret = unsafe { (self.pass_thru_disconnect)(self.channel_id) };
         tracing::trace!(ret = j2534_common::status_str(ret), "PassThruDisconnect");
-        let ret = unsafe { (self.pass_thru_close)(self.device_id) };
-        tracing::trace!(ret = j2534_common::status_str(ret), "PassThruClose");
+        // Join threads BEFORE PassThruClose — the threads may still be inside
+        // a DLL call that references device-level structures.  Closing the
+        // device while a read/write is in-flight causes a use-after-free.
         if let Some(h) = self.tx_thread.take() {
             let _ = h.join();
         }
         if let Some(h) = self.rx_thread.take() {
             let _ = h.join();
         }
+        let ret = unsafe { (self.pass_thru_close)(self.device_id) };
+        tracing::trace!(ret = j2534_common::status_str(ret), "PassThruClose");
     }
 }
 

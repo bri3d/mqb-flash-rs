@@ -195,31 +195,43 @@ async fn flash_via_j2534(
     opts: &FlashOptions,
 ) -> Result<(), FlashError> {
     if native_isotp {
-        // VW ECUs require an OBD-II DTC clear before the programming precondition check.
-        // Open a separate ISO 15765 channel on the OBD-II IDs, send mode 04, then drop
-        // the channel before opening the main flash channel (J2534 only supports one
-        // active channel at a time).
-        if let Ok(obd) = crate::j2534_isotp_adapter::J2534NativeIsoTpTransport::open(
-            dll, bitrate, 0x700, 0x7E8, None,
+        // Open the J2534 device once; the OBD DTC-clear channel and the main
+        // flash channel share the same device handle so we never call
+        // PassThruClose between channels (which disconnects the USB device
+        // and prevents a subsequent PassThruOpen from succeeding).
+        let mut device = crate::j2534_common::open_device(dll)
+            .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
+
+        // VW ECUs require an OBD-II DTC clear before the programming
+        // precondition check.  Open a temporary ISO 15765 channel on the
+        // OBD-II IDs, send mode 04, then disconnect the channel (keeping
+        // the device open) before opening the main flash channel.
+        match crate::j2534_isotp_adapter::J2534NativeIsoTpTransport::open_on_device(
+            device, bitrate, 0x700, 0x7E8, None,
         ) {
-            send_obd_dtc_clear(&obd).await;
-            // Drop the OBD transport on a blocking thread so the J2534 thread
-            // joins don't block the async runtime.
-            tokio::task::spawn_blocking(move || drop(obd));
-        } else {
-            tracing::warn!("OBD DTC clear channel open failed (continuing)");
+            Ok(obd) => {
+                send_obd_dtc_clear(&obd).await;
+                // Disconnect the OBD channel and recover the device handle.
+                device = tokio::task::spawn_blocking(move || obd.into_device())
+                    .await
+                    .map_err(|e| FlashError::Interface(format!("OBD channel teardown failed: {e}")))?;
+            }
+            Err((e, dev)) => {
+                tracing::warn!("OBD DTC clear channel open failed: {e} (continuing)");
+                device = dev;
+            }
         }
 
         let tx_id = flash_info.control_module_identifier.txid;
         let rx_id = flash_info.control_module_identifier.rxid;
-        let transport = crate::j2534_isotp_adapter::J2534NativeIsoTpTransport::open(
-            dll,
+        let transport = crate::j2534_isotp_adapter::J2534NativeIsoTpTransport::open_on_device(
+            device,
             bitrate,
             tx_id,
             rx_id,
             opts.stmin_override,
         )
-        .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
+        .map_err(|(e, _dev)| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
         let result = run_with_transport(&transport, flash_info, blocks, opts).await;
         tokio::task::spawn_blocking(move || drop(transport));
         result
@@ -292,9 +304,8 @@ async fn run_with_adapter(
     send_obd_dtc_clear_via_adapter(adapter).await;
 
     let mut config = make_isotp_config(flash_info);
-    if let Some(us) = opts.stmin_override {
-        config.separation_time_min = Some(std::time::Duration::from_micros(us as u64));
-    }
+    let stmin_us = opts.stmin_override.unwrap_or(500);
+    config.separation_time_min = Some(std::time::Duration::from_micros(stmin_us as u64));
     let isotp = IsoTPAdapter::new(adapter, config);
     run_with_transport(&isotp, flash_info, blocks, opts).await
 }
@@ -311,9 +322,12 @@ fn send_progress(opts: &FlashOptions, update: ProgressUpdate) {
 
 /// Send OBD-II mode 04 (Clear Emission-Related DTCs) using the supplied transport.
 ///
-/// Sends the single byte `0x04` as an ISO-TP PDU and waits up to 2 s for the
-/// positive response (`0x44`).  Errors and timeouts are logged and ignored —
-/// a failed DTC clear must not abort the flash sequence.
+/// Sends the single byte `0x04` as an ISO-TP PDU and waits for the positive
+/// response (`0x44`).  The ECU may send one or more NRC 0x78
+/// (requestCorrectlyReceivedResponsePending) before the final answer — these
+/// are consumed transparently.  Each pending response resets the 5 s timeout.
+/// Errors and timeouts are logged and ignored — a failed DTC clear must not
+/// abort the flash sequence.
 async fn send_obd_dtc_clear<T: IsoTpTransport>(transport: &T) {
     tracing::info!("Sending OBD-II mode 04 (Clear DTCs) [tester=0x700, ECU=0x7E8]");
     if let Err(e) = transport.send(&[0x04]).await {
@@ -321,11 +335,31 @@ async fn send_obd_dtc_clear<T: IsoTpTransport>(transport: &T) {
         return;
     }
     let mut stream = transport.recv();
-    match tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await {
-        Ok(Some(Ok(resp))) => tracing::debug!("OBD DTC clear response: {:02X?}", resp),
-        Ok(Some(Err(e))) => tracing::debug!("OBD DTC clear: response error {e} (OK)"),
-        Ok(None) => tracing::debug!("OBD DTC clear: stream ended"),
-        Err(_) => tracing::debug!("OBD DTC clear: no response within 2 s (OK)"),
+    let timeout = std::time::Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout(timeout, stream.next()).await {
+            Ok(Some(Ok(resp))) => {
+                // NRC 0x78 = responsePending: ECU is still processing, keep waiting.
+                if resp.len() >= 3 && resp[0] == 0x7F && resp[2] == 0x78 {
+                    tracing::debug!("OBD DTC clear: response pending (NRC 0x78), waiting…");
+                    continue;
+                }
+                tracing::debug!("OBD DTC clear response: {:02X?}", resp);
+                return;
+            }
+            Ok(Some(Err(e))) => {
+                tracing::debug!("OBD DTC clear: response error {e} (OK)");
+                return;
+            }
+            Ok(None) => {
+                tracing::debug!("OBD DTC clear: stream ended");
+                return;
+            }
+            Err(_) => {
+                tracing::debug!("OBD DTC clear: no response within {} s (OK)", timeout.as_secs());
+                return;
+            }
+        }
     }
 }
 
