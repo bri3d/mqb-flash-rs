@@ -26,6 +26,9 @@ pub fn validate_haldex<'a>(
 
     // Read current checksum at +0x8
     let stored_offset = checksum_location + 0x08;
+    if checksum_location + 0x0A > data.len() {
+        return (ChecksumState::Failed, Cow::Borrowed(data));
+    }
     let stored = read_u16_le(data, stored_offset);
 
     // Sum all u16 LE words, excluding the checksum block region [checksum_location .. checksum_location + 0xA]

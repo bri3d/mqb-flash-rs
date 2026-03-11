@@ -79,6 +79,9 @@ pub fn validate_simos<'a>(
         return (ChecksumState::Failed, Cow::Borrowed(data));
     };
 
+    if checksum_loc + 12 > data.len() {
+        return (ChecksumState::Failed, Cow::Borrowed(data));
+    }
     let stored = read_u32_le(data, checksum_loc + 4);
     let area_count = data[checksum_loc + 8] as usize;
 
@@ -99,7 +102,7 @@ pub fn validate_simos<'a>(
     }
 
     let mut crc: u32 = 0;
-    for pair in addresses.chunks(2) {
+    for pair in addresses.chunks_exact(2) {
         if pair[1] >= data.len() {
             return (ChecksumState::Failed, Cow::Borrowed(data));
         }

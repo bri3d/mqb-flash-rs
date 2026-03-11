@@ -854,24 +854,34 @@ fn write_csv(items: &[CsvItem]) -> String {
         } else {
             format!("{:#010x}", item.address)
         };
-        out.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-            item.name,
-            item.unit,
-            item.equation,
-            item.format,
-            addr,
-            item.length,
+        let fields: [&str; 15] = [
+            &item.name,
+            &item.unit,
+            &item.equation,
+            &item.format,
+            &addr,
+            &item.length.to_string(),
             if item.signed { "TRUE" } else { "FALSE" },
-            fmt_f64(item.prog_min),
-            fmt_f64(item.prog_max),
-            fmt_f64(item.warn_min),
-            fmt_f64(item.warn_max),
-            fmt_f64(item.smoothing),
+            &fmt_f64(item.prog_min),
+            &fmt_f64(item.prog_max),
+            &fmt_f64(item.warn_min),
+            &fmt_f64(item.warn_max),
+            &fmt_f64(item.smoothing),
             if item.enabled { "TRUE" } else { "FALSE" },
-            item.tabs,
-            item.assign_to,
-        ));
+            &item.tabs,
+            &item.assign_to,
+        ];
+        for (i, field) in fields.iter().enumerate() {
+            if i > 0 { out.push(','); }
+            if field.contains(',') || field.contains('"') || field.contains('\n') {
+                out.push('"');
+                out.push_str(&field.replace('"', "\"\""));
+                out.push('"');
+            } else {
+                out.push_str(field);
+            }
+        }
+        out.push('\n');
     }
     out
 }

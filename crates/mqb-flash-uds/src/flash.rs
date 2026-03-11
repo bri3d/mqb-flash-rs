@@ -724,19 +724,24 @@ async fn flash_patch_block<T: IsoTpTransport>(
     while offset < data.len() {
         let chunk_size = (patch_info.block_transfer_size_fn)(target_num, offset);
         let end = (offset + chunk_size).min(data.len());
+        let mut success = false;
         for attempt in 0..MAX_PATCH_RETRIES {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
             match uds.transfer_data(counter, Some(&data[offset..end])).await {
                 Ok(_) => {
                     counter = counter.wrapping_add(1);
+                    success = true;
                     break;
                 }
                 Err(_) if attempt + 1 < MAX_PATCH_RETRIES => {
-                    tracing::debug!(attempt, offset, "Patch TransferData retry (25 ms)");
+                    tracing::debug!(attempt, offset, "Patch TransferData retry");
                     counter = counter.wrapping_add(1);
-                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                 }
                 Err(e) => return Err(FlashError::from(e)),
             }
+        }
+        if !success {
+            return Err(FlashError::Config("Patch TransferData retries exhausted".into()));
         }
         offset = end;
         send_progress(opts, ProgressUpdate::BlockTransferProgress {
