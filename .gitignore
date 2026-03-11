@@ -11,6 +11,9 @@
 *.a2l
 *.flashable_block*
 
+# Allow embedded data files needed for compilation
+!data/*.bin
+
 # Session logs / debug logs
 *.log
 
