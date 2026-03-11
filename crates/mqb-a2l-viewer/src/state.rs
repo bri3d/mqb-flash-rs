@@ -50,6 +50,9 @@ pub struct State {
     pub compare_mode: bool,
     pub show_changed_only: bool,
     pub changed_set: HashSet<usize>,
+    /// Characteristics where an axis changed but data values stayed the same
+    /// (possible missing rescale).
+    pub axis_changed_values_same: HashSet<usize>,
     pub computing_changes: bool,
 }
 
@@ -82,6 +85,7 @@ impl Default for State {
             compare_mode: false,
             show_changed_only: false,
             changed_set: HashSet::new(),
+            axis_changed_values_same: HashSet::new(),
             computing_changes: false,
         }
     }
@@ -173,5 +177,9 @@ pub enum Msg {
     SelectPrev,
     ToggleCompare(bool),
     ToggleChangedOnly(bool),
-    ChangedSetComputed(HashSet<usize>),
+    ChangedSetComputed {
+        changed: HashSet<usize>,
+        /// Axis changed but data values identical — possible missing rescale.
+        axis_changed_values_same: HashSet<usize>,
+    },
 }

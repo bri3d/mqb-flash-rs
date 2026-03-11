@@ -135,3 +135,18 @@ pub fn diff_cell_colors(pct_change: f64, theme: &Theme) -> (Color, Color) {
 pub fn changed_indicator_color(theme: &Theme) -> Color {
     if is_dark(theme) { Color::from_rgb(1.0, 0.7, 0.2) } else { Color::from_rgb(0.9, 0.55, 0.0) }
 }
+
+/// Axis changed but data values identical — possible missing rescale.
+/// Bright magenta/red to stand out.
+pub fn rescale_warning_color(theme: &Theme) -> Color {
+    if is_dark(theme) { Color::from_rgb(1.0, 0.3, 0.6) } else { Color::from_rgb(0.85, 0.1, 0.35) }
+}
+
+/// Background tint for the rescale warning banner.
+pub fn rescale_warning_bg(theme: &Theme) -> Color {
+    if is_dark(theme) {
+        Color::from_rgb(0.35, 0.08, 0.18)
+    } else {
+        Color::from_rgb(1.0, 0.88, 0.92)
+    }
+}

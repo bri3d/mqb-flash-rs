@@ -129,6 +129,18 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
                 .spacing(8)
                 .align_y(Alignment::Center),
             );
+            if !state.axis_changed_values_same.is_empty() {
+                col = col.push(
+                    container(
+                        text(format!("  !! {} possible rescale issues", state.axis_changed_values_same.len()))
+                            .size(11)
+                    )
+                    .style(|theme: &Theme| container::Style {
+                        text_color: Some(rescale_warning_color(theme)),
+                        ..Default::default()
+                    })
+                );
+            }
         }
     }
 
@@ -192,6 +204,7 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
             let ch = &a2l.characteristics[idx];
             let is_selected = state.selected == Some(idx);
             let is_changed = show_changed_dot && state.changed_set.contains(&idx);
+            let is_rescale_suspect = show_changed_dot && state.axis_changed_values_same.contains(&idx);
             let type_tag = match ch.char_type {
                 CharacteristicType::Value => "V",
                 CharacteristicType::Curve => "C",
@@ -210,7 +223,9 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
                 ]
                 .spacing(4)
                 .align_y(Alignment::Center);
-                if is_changed {
+                if is_rescale_suspect {
+                    name_row = name_row.push(text("!!").size(10).font(MONO).color(Color::from_rgb(1.0, 0.3, 0.6)));
+                } else if is_changed {
                     name_row = name_row.push(text("●").size(8).color(Color::from_rgb(1.0, 0.85, 0.4)));
                 }
                 name_row = name_row.push(text(&ch.name).size(12).color(Color::WHITE));
@@ -241,7 +256,15 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
                 ]
                 .spacing(4)
                 .align_y(Alignment::Center);
-                if is_changed {
+                if is_rescale_suspect {
+                    name_row = name_row.push(
+                        container(text("!!").size(10).font(MONO))
+                            .style(move |theme: &Theme| container::Style {
+                                text_color: Some(rescale_warning_color(theme)),
+                                ..Default::default()
+                            })
+                    );
+                } else if is_changed {
                     name_row = name_row.push(
                         container(text("●").size(8))
                             .style(move |theme: &Theme| container::Style {
@@ -355,11 +378,15 @@ fn view_right_panel(state: &State) -> Element<'_, Msg> {
                     })
             );
         } else {
+            let is_rescale_suspect = state.selected
+                .map(|i| state.axis_changed_values_same.contains(&i))
+                .unwrap_or(false);
             col = col.push(view_compare(
                 &state.cached_values,
                 &state.cached_values2,
                 ch,
                 a2l,
+                is_rescale_suspect,
             ));
         }
     } else {

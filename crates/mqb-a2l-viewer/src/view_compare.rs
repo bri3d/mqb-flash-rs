@@ -5,7 +5,7 @@ use mqb_a2l::reader::CharacteristicValues;
 use mqb_a2l::{A2lFile, Characteristic};
 
 use crate::state::Msg;
-use crate::theme::{diff_cell_colors, diff_pct_color, error_color, muted_text, warning_color};
+use crate::theme::{diff_cell_colors, diff_pct_color, error_color, muted_text, rescale_warning_bg, rescale_warning_color, warning_color};
 use crate::view_single::{view_curve, view_values};
 use crate::widgets::{diff_map_table, format_pct, format_val, map_table, pct_diff};
 use crate::MONO;
@@ -15,9 +15,10 @@ pub fn view_compare<'a>(
     v2: &'a Option<CharacteristicValues>,
     ch: &'a Characteristic,
     a2l: &'a A2lFile,
+    rescale_suspect: bool,
 ) -> Element<'a, Msg> {
     match (v1, v2) {
-        (Some(val1), Some(val2)) => view_compare_pair(val1, val2, ch, a2l),
+        (Some(val1), Some(val2)) => view_compare_pair(val1, val2, ch, a2l, rescale_suspect),
         (Some(val1), None) => {
             column![
                 text("BIN 1").size(13),
@@ -45,13 +46,37 @@ pub fn view_compare<'a>(
     }
 }
 
+fn rescale_warning_banner<'a>() -> Element<'a, Msg> {
+    container(
+        text("Axis changed but map values are identical — may need rescaling")
+            .size(13),
+    )
+    .padding([6, 10])
+    .style(|theme: &Theme| container::Style {
+        background: Some(rescale_warning_bg(theme).into()),
+        text_color: Some(rescale_warning_color(theme)),
+        border: iced::Border {
+            color: rescale_warning_color(theme),
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
 fn view_compare_pair<'a>(
     v1: &'a CharacteristicValues,
     v2: &'a CharacteristicValues,
     ch: &'a Characteristic,
     a2l: &'a A2lFile,
+    rescale_suspect: bool,
 ) -> Element<'a, Msg> {
-    match (v1, v2) {
+    let mut outer = column![].spacing(8);
+    if rescale_suspect {
+        outer = outer.push(rescale_warning_banner());
+    }
+    let content: Element<'a, Msg> = match (v1, v2) {
         (CharacteristicValues::Scalar(a), CharacteristicValues::Scalar(b)) => {
             view_compare_scalar(*a, *b, ch, a2l)
         }
@@ -79,7 +104,9 @@ fn view_compare_pair<'a>(
             .spacing(8)
             .into()
         }
-    }
+    };
+    outer = outer.push(content);
+    outer.into()
 }
 
 fn view_compare_scalar<'a>(v1: f64, v2: f64, ch: &'a Characteristic, a2l: &'a A2lFile) -> Element<'a, Msg> {

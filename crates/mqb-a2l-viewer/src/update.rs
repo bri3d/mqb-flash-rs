@@ -4,7 +4,7 @@ use std::sync::Arc;
 use iced::widget::scrollable::{self, RelativeOffset};
 use iced::{keyboard, Task};
 
-use mqb_a2l::reader::{make_resolver, read_characteristic};
+use mqb_a2l::reader::{CharacteristicValues, make_resolver, read_characteristic};
 use mqb_a2l::A2lFile;
 
 use crate::data::{address_map_for, build_categories};
@@ -188,8 +188,9 @@ pub fn update(state: &mut State, msg: Msg) -> Task<Msg> {
             state.show_changed_only = on;
             state.rebuild_filter();
         }
-        Msg::ChangedSetComputed(set) => {
-            state.changed_set = set;
+        Msg::ChangedSetComputed { changed, axis_changed_values_same } => {
+            state.changed_set = changed;
+            state.axis_changed_values_same = axis_changed_values_same;
             state.computing_changes = false;
             // Rebuild filter in case show_changed_only is active
             state.rebuild_filter();
@@ -215,6 +216,7 @@ fn maybe_compute_changes(state: &mut State) -> Task<Msg> {
 
     state.computing_changes = true;
     state.changed_set.clear();
+    state.axis_changed_values_same.clear();
 
     let a2l = Arc::clone(a2l);
     let bin1 = Arc::clone(bin1);
@@ -225,27 +227,57 @@ fn maybe_compute_changes(state: &mut State) -> Task<Msg> {
         async move {
             compute_changed_set(&a2l, &bin1, &bin2, &map)
         },
-        Msg::ChangedSetComputed,
+        |(changed, axis_changed_values_same)| Msg::ChangedSetComputed {
+            changed,
+            axis_changed_values_same,
+        },
     )
 }
 
-/// Compare all characteristics between two binaries. Returns indices that differ.
+/// Compare all characteristics between two binaries.
+/// Returns (changed_indices, axis_changed_values_same_indices).
 fn compute_changed_set(
     a2l: &A2lFile,
     bin1: &[u8],
     bin2: &[u8],
     map: &mqb_a2l::reader::AddressMap,
-) -> HashSet<usize> {
+) -> (HashSet<usize>, HashSet<usize>) {
     let resolve = make_resolver(map);
     let mut changed = HashSet::new();
+    let mut axis_changed_values_same = HashSet::new();
     for (i, ch) in a2l.characteristics.iter().enumerate() {
         let v1 = read_characteristic(ch, a2l, bin1, &resolve);
         let v2 = read_characteristic(ch, a2l, bin2, &resolve);
         match (&v1, &v2) {
-            (Some(a), Some(b)) if a != b => { changed.insert(i); }
+            (Some(a), Some(b)) if a != b => {
+                changed.insert(i);
+                if has_axis_change_without_rescale(a, b) {
+                    axis_changed_values_same.insert(i);
+                }
+            }
             (None, Some(_)) | (Some(_), None) => { changed.insert(i); }
             _ => {}
         }
     }
-    changed
+    (changed, axis_changed_values_same)
+}
+
+/// Returns true if the axes differ but the data values are identical —
+/// suggesting the values may not have been rescaled for the new axis.
+fn has_axis_change_without_rescale(a: &CharacteristicValues, b: &CharacteristicValues) -> bool {
+    match (a, b) {
+        (
+            CharacteristicValues::Curve { x: x1, y: y1 },
+            CharacteristicValues::Curve { x: x2, y: y2 },
+        ) => x1 != x2 && y1 == y2,
+        (
+            CharacteristicValues::Map { x: x1, y: y1, z: z1 },
+            CharacteristicValues::Map { x: x2, y: y2, z: z2 },
+        ) => (x1 != x2 || y1 != y2) && z1 == z2,
+        (
+            CharacteristicValues::Cuboid { x: x1, y: y1, z: z1, w: w1 },
+            CharacteristicValues::Cuboid { x: x2, y: y2, z: z2, w: w2 },
+        ) => (x1 != x2 || y1 != y2 || z1 != z2) && w1 == w2,
+        _ => false,
+    }
 }
