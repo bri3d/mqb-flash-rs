@@ -7,6 +7,5 @@ description = "LZSS algorithms for VW ECU firmware: Storer-Szymanski, LZSS10, an
 
 [dependencies]
 mqb-bytes.workspace = true
-thiserror.workspace = true
 
 [dev-dependencies]

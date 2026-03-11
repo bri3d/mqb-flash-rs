@@ -94,6 +94,10 @@ pub mod socketcan;
 #[cfg_attr(docsrs, doc(cfg(all(target_os = "windows", feature = "vector-xl"))))]
 pub mod vector;
 
+#[cfg(all(target_os = "windows", feature = "j2534"))]
+#[cfg_attr(docsrs, doc(cfg(all(target_os = "windows", feature = "j2534"))))]
+pub mod j2534;
+
 #[cfg(feature = "panda")]
 #[cfg_attr(docsrs, doc(cfg(feature = "panda")))]
 pub mod panda;

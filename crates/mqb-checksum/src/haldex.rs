@@ -30,11 +30,9 @@ pub fn validate_haldex<'a>(
 
     // Sum all u16 LE words, excluding the checksum block region [checksum_location .. checksum_location + 0xA]
     let mut sum: u16 = 0;
-    for chunk in data[..checksum_location].chunks(2).chain(data[checksum_location + 0xA..].chunks(2)) {
-        if chunk.len() == 2 {
-            let word = read_u16_le(chunk, 0);
-            sum = sum.wrapping_add(word);
-        }
+    for chunk in data[..checksum_location].chunks_exact(2).chain(data[checksum_location + 0xA..].chunks_exact(2)) {
+        let word = read_u16_le(chunk, 0);
+        sum = sum.wrapping_add(word);
     }
     // NOT the result
     let calculated = 0xFFFFu16 - sum;

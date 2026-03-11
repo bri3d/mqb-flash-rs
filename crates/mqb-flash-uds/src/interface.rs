@@ -37,17 +37,14 @@ impl std::fmt::Display for Interface {
         match self {
             Interface::SocketCan(ifname) => write!(f, "socketcan:{ifname}"),
             Interface::Panda => write!(f, "panda"),
-            Interface::J2534 { dll: None, bitrate: 500_000, native_isotp } => {
-                write!(f, "{}", if *native_isotp { "j2534-isotp" } else { "j2534" })
-            }
-            Interface::J2534 { dll: Some(path), bitrate: 500_000, native_isotp } => {
-                write!(f, "{}:{path}", if *native_isotp { "j2534-isotp" } else { "j2534" })
-            }
-            Interface::J2534 { dll: None, bitrate, native_isotp } => {
-                write!(f, "{}::{bitrate}", if *native_isotp { "j2534-isotp" } else { "j2534" })
-            }
-            Interface::J2534 { dll: Some(path), bitrate, native_isotp } => {
-                write!(f, "{}:{path}:{bitrate}", if *native_isotp { "j2534-isotp" } else { "j2534" })
+            Interface::J2534 { dll, bitrate, native_isotp } => {
+                let prefix = if *native_isotp { "j2534-isotp" } else { "j2534" };
+                match (dll, bitrate) {
+                    (None, 500_000) => write!(f, "{prefix}"),
+                    (Some(path), 500_000) => write!(f, "{prefix}:{path}"),
+                    (None, br) => write!(f, "{prefix}::{br}"),
+                    (Some(path), br) => write!(f, "{prefix}:{path}:{br}"),
+                }
             }
             Interface::Fake(p) => write!(f, "fake:{}", p.display()),
         }

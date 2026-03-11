@@ -39,45 +39,43 @@ fn extract_odx_with(
     let doc = roxmltree::Document::parse(xml)?;
     let root = doc.root_element();
 
-    // Collect allowed box codes
+    // Single pass: collect box codes, size map, and flash data nodes
     let mut allowed_boxcodes = Vec::new();
-    for node in root.descendants() {
-        if node.tag_name().name() == "IDENT-VALUE" {
-            if let Some(text) = node.text() {
-                allowed_boxcodes.push(text.trim_end().to_owned());
-            }
-        }
-    }
-
-    // Build a map: FLASHDATA-ID → UNCOMPRESSED-SIZE
-    //
-    // XML path: DATABLOCK/FLASHDATA-REF[@ID-REF] / ../SEGMENTS/SEGMENT/UNCOMPRESSED-SIZE
-    // i.e. from FLASHDATA-REF, go up to DATABLOCK, then descend through SEGMENTS/SEGMENT.
     let mut size_map: HashMap<String, usize> = HashMap::new();
+    let mut flash_data_nodes = Vec::new();
+
     for node in root.descendants() {
-        if node.tag_name().name() == "FLASHDATA-REF" {
-            let id_ref = node.attribute("ID-REF").unwrap_or("").to_owned();
-            // parent = DATABLOCK; search its descendants for UNCOMPRESSED-SIZE
-            if let Some(datablock) = node.parent() {
-                let size = datablock
-                    .descendants()
-                    .find(|n| n.tag_name().name() == "UNCOMPRESSED-SIZE")
-                    .and_then(|n| n.text())
-                    .and_then(|t| t.trim().parse::<usize>().ok());
-                if let Some(sz) = size {
-                    size_map.insert(id_ref, sz);
+        match node.tag_name().name() {
+            "IDENT-VALUE" => {
+                if let Some(text) = node.text() {
+                    allowed_boxcodes.push(text.trim_end().to_owned());
                 }
             }
+            "FLASHDATA-REF" => {
+                let id_ref = node.attribute("ID-REF").unwrap_or("").to_owned();
+                // parent = DATABLOCK; search its descendants for UNCOMPRESSED-SIZE
+                if let Some(datablock) = node.parent() {
+                    let size = datablock
+                        .descendants()
+                        .find(|n| n.tag_name().name() == "UNCOMPRESSED-SIZE")
+                        .and_then(|n| n.text())
+                        .and_then(|t| t.trim().parse::<usize>().ok());
+                    if let Some(sz) = size {
+                        size_map.insert(id_ref, sz);
+                    }
+                }
+            }
+            "FLASHDATA" => {
+                flash_data_nodes.push(node);
+            }
+            _ => {}
         }
     }
 
-    // Parse each FLASHDATA element
+    // Process each FLASHDATA element
     let mut all_data = HashMap::new();
 
-    for node in root.descendants() {
-        if node.tag_name().name() != "FLASHDATA" {
-            continue;
-        }
+    for node in flash_data_nodes {
 
         let data_id = node.attribute("ID").unwrap_or("").to_owned();
 

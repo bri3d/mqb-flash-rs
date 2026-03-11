@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 
-use mqb_flash_uds::{FlashOptions, Interface};
+use mqb_flash_uds::{FlashOptions, Interface, ProgressUpdate};
 use mqb_modules::FlashInfo;
 
 // ── CLI argument types ────────────────────────────────────────────────────────
@@ -177,6 +177,122 @@ fn parse_block_args(block_args: &[String]) -> Result<HashMap<String, PathBuf>> {
     Ok(blocks)
 }
 
+
+// ── CLI progress display ─────────────────────────────────────────────────────
+
+/// Spawn a background task that reads [`ProgressUpdate`] events and drives
+/// an indicatif multi-progress bar for the CLI.
+fn spawn_progress_listener(
+) -> (tokio::sync::mpsc::UnboundedSender<ProgressUpdate>, tokio::task::JoinHandle<()>) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ProgressUpdate>();
+
+    let handle = tokio::spawn(async move {
+        use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+
+        let mp = MultiProgress::new();
+
+        // Status line for the current step (spinner).
+        let status = mp.add(ProgressBar::new_spinner());
+        status.set_style(
+            ProgressStyle::with_template("{spinner:.cyan} {msg}")
+                .unwrap()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+        );
+        status.enable_steady_tick(std::time::Duration::from_millis(80));
+
+        // Transfer progress bar — created lazily per block.
+        let mut transfer_bar: Option<ProgressBar> = None;
+
+        while let Some(update) = rx.recv().await {
+            match &update {
+                ProgressUpdate::ClearingDtcs => {
+                    status.set_message("Clearing DTCs…");
+                }
+                ProgressUpdate::Connecting => {
+                    status.set_message("Opening extended diagnostic session…");
+                }
+                ProgressUpdate::ReadVin { vin } => {
+                    status.set_message(format!("Connected — VIN: {vin}"));
+                }
+                ProgressUpdate::CheckingPreconditions => {
+                    status.set_message("Checking programming preconditions…");
+                }
+                ProgressUpdate::ProgrammingSession => {
+                    status.set_message("Upgrading to programming session…");
+                }
+                ProgressUpdate::Authenticating => {
+                    status.set_message("Performing SA2 seed-key authentication…");
+                }
+                ProgressUpdate::WritingWorkshopCode => {
+                    status.set_message("Writing workshop code…");
+                }
+                ProgressUpdate::FlashingBlock { name, index, total } => {
+                    // Finish any previous transfer bar.
+                    if let Some(bar) = transfer_bar.take() {
+                        bar.finish_and_clear();
+                        mp.remove(&bar);
+                    }
+                    status.set_message(format!(
+                        "Flashing block {name} ({}/{total})…",
+                        index + 1
+                    ));
+                }
+                ProgressUpdate::BlockErasing { name } => {
+                    status.set_message(format!("Erasing {name}…"));
+                }
+                ProgressUpdate::BlockDownloading { name } => {
+                    status.set_message(format!("Requesting download for {name}…"));
+                }
+                ProgressUpdate::BlockTransferProgress { name, bytes_sent, bytes_total } => {
+                    let bar = transfer_bar.get_or_insert_with(|| {
+                        let b = mp.add(ProgressBar::new(*bytes_total as u64));
+                        b.set_style(
+                            ProgressStyle::with_template(
+                                "  {bar:40.green/dim} {bytes}/{total_bytes} ({bytes_per_sec}) {msg}"
+                            )
+                            .unwrap()
+                            .progress_chars("━╸─"),
+                        );
+                        b.set_message(name.clone());
+                        b
+                    });
+                    bar.set_position(*bytes_sent as u64);
+                }
+                ProgressUpdate::BlockChecksum { name } => {
+                    if let Some(bar) = transfer_bar.take() {
+                        bar.finish_and_clear();
+                        mp.remove(&bar);
+                    }
+                    status.set_message(format!("Verifying checksum for {name}…"));
+                }
+                ProgressUpdate::BlockComplete { .. } => {}
+                ProgressUpdate::Verifying => {
+                    if let Some(bar) = transfer_bar.take() {
+                        bar.finish_and_clear();
+                        mp.remove(&bar);
+                    }
+                    status.set_message("Verifying programming dependencies…");
+                }
+                ProgressUpdate::EcuReset => {
+                    status.set_message("Resetting ECU…");
+                }
+                ProgressUpdate::Complete => {
+                    status.finish_with_message("Flash complete!");
+                    break;
+                }
+                ProgressUpdate::Error(e) => {
+                    if let Some(bar) = transfer_bar.take() {
+                        bar.abandon();
+                    }
+                    status.finish_with_message(format!("Error: {e}"));
+                    break;
+                }
+            }
+        }
+    });
+
+    (tx, handle)
+}
 
 // ── Command implementations ───────────────────────────────────────────────────
 
@@ -390,16 +506,23 @@ async fn cmd_flash(
     // Flash in block-number order
     blocks.sort_by_key(|b| b.block_number);
 
+    let (progress_tx, progress_handle) = spawn_progress_listener();
+
     let opts = FlashOptions {
         interface,
         patch_cboot,
         stmin_override: None,
         workshop_code: [0x20, 0x04, 0x20, 0x42, 0x04, 0x20, 0x42, 0xB1, 0x3D],
-        progress_tx: None,
+        progress_tx: Some(progress_tx.clone()),
     };
 
-    mqb_flash_uds::flash_blocks(flash_info, blocks, opts).await
-        .with_context(|| "Flash failed")?;
+    let result = mqb_flash_uds::flash_blocks(flash_info, blocks, opts).await;
+    match &result {
+        Ok(()) => { let _ = progress_tx.send(ProgressUpdate::Complete); }
+        Err(e) => { let _ = progress_tx.send(ProgressUpdate::Error(e.to_string())); }
+    }
+    let _ = progress_handle.await;
+    result.with_context(|| "Flash failed")?;
 
     Ok(())
 }
@@ -493,18 +616,24 @@ async fn cmd_unlock(firmware_path: &Path, module: &str, interface_str: &str) -> 
         block_name: "CAL".to_owned(),
     });
 
+    let (progress_tx, progress_handle) = spawn_progress_listener();
+
     let opts = FlashOptions {
         interface,
         patch_cboot: false,
         stmin_override: None,
         workshop_code: [0x20, 0x04, 0x20, 0x42, 0x04, 0x20, 0x42, 0xB1, 0x3D],
-        progress_tx: None,
+        progress_tx: Some(progress_tx.clone()),
     };
 
-    mqb_flash_uds::flash_blocks(flash_info, blocks, opts).await
-        .with_context(|| "Unlock flash failed")?;
+    let result = mqb_flash_uds::flash_blocks(flash_info, blocks, opts).await;
+    match &result {
+        Ok(()) => { let _ = progress_tx.send(ProgressUpdate::Complete); }
+        Err(e) => { let _ = progress_tx.send(ProgressUpdate::Error(e.to_string())); }
+    }
+    let _ = progress_handle.await;
+    result.with_context(|| "Unlock flash failed")?;
 
-    println!("Unlock complete");
     Ok(())
 }
 

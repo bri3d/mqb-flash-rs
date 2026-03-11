@@ -154,22 +154,19 @@ pub fn encode(input: &[u8], padding: Padding) -> Vec<u8> {
 
     // Flush remaining encoded data
     if !encoded_data.is_empty() {
-        match padding {
-            Padding::Exact => {
-                let total_size = compressed_size + encoded_data.len() + 1;
-                if total_size % 16 != 0 {
-                    while (compressed_size + encoded_data.len() + 1) % 16 != 0 {
-                        if flag_pos == 0x00 {
-                            break;
-                        }
-                        encoded_data.push(0);
-                        encoded_data.push(0);
-                        flags |= flag_pos;
-                        flag_pos >>= 1;
+        if padding == Padding::Exact {
+            let total_size = compressed_size + encoded_data.len() + 1;
+            if total_size % 16 != 0 {
+                while (compressed_size + encoded_data.len() + 1) % 16 != 0 {
+                    if flag_pos == 0x00 {
+                        break;
                     }
+                    encoded_data.push(0);
+                    encoded_data.push(0);
+                    flags |= flag_pos;
+                    flag_pos >>= 1;
                 }
             }
-            _ => {}
         }
 
         output.push(flags);
@@ -257,14 +254,10 @@ pub fn decode(input: &[u8]) -> Vec<u8> {
             let offset = WINDOW_SIZE - dist;
             let length = byte1 >> 2;
 
-            // Copy from window to a temp buffer first (avoid aliasing issues)
-            let mut temp = [0u8; 64];
             for i in 0..length {
-                temp[i] = window[(next_char + offset + i) % WINDOW_SIZE];
-            }
-            for i in 0..length {
-                output.push(temp[i]);
-                window[(next_char + i) % WINDOW_SIZE] = temp[i];
+                let b = window[(next_char + offset + i) % WINDOW_SIZE];
+                output.push(b);
+                window[(next_char + i) % WINDOW_SIZE] = b;
             }
             next_char = (next_char + length) % WINDOW_SIZE;
         }

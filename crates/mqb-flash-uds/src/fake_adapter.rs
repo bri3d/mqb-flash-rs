@@ -204,8 +204,7 @@ impl CanAdapter for FakeCanAdapter {
                         continue;
                     }
                     self.isotp_pending = None;
-                    let uds = data[1..1 + len].to_vec();
-                    self.handle_complete_uds(&uds);
+                    self.handle_complete_uds(&data[1..1 + len]);
                 }
 
                 0x1 => {

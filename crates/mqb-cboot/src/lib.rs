@@ -47,8 +47,7 @@ pub fn patch_cboot(data: &[u8]) -> Result<Vec<u8>, PatchError> {
     let positions: Vec<usize> = data
         .windows(NEEDLE.len())
         .enumerate()
-        .filter(|(_, w)| *w == NEEDLE)
-        .map(|(i, _)| i)
+        .filter_map(|(i, w)| (w == NEEDLE).then_some(i))
         .collect();
 
     if positions.len() != 2 {

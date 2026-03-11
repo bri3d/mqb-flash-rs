@@ -64,12 +64,39 @@ impl From<automotive::Error> for FlashError {
 /// Sent via [`FlashOptions::progress_tx`] if one is configured.
 #[derive(Debug, Clone)]
 pub enum ProgressUpdate {
+    /// Step 0: OBD-II DTC clear before programming.
+    ClearingDtcs,
+    /// Step 1: Opening extended diagnostic session.
     Connecting,
+    /// VIN was read from the ECU.
+    ReadVin { vin: String },
+    /// Step 3: Checking programming precondition.
+    CheckingPreconditions,
+    /// Step 5: Upgrading to programming session.
+    ProgrammingSession,
+    /// Step 7: SA2 seed-key authentication.
     Authenticating,
+    /// Step 9: Writing workshop code.
+    WritingWorkshopCode,
+    /// Starting to flash a block (overall progress).
     FlashingBlock { name: String, index: usize, total: usize },
+    /// Sub-step: erasing the block.
+    BlockErasing { name: String },
+    /// Sub-step: requesting download.
+    BlockDownloading { name: String },
+    /// Sub-step: transfer data progress (bytes_sent / bytes_total).
+    BlockTransferProgress { name: String, bytes_sent: usize, bytes_total: usize },
+    /// Sub-step: verifying block checksum.
+    BlockChecksum { name: String },
+    /// Block finished.
     BlockComplete { index: usize },
+    /// Step 12: Verifying programming dependencies.
     Verifying,
+    /// Step 14: Resetting ECU.
+    EcuReset,
+    /// Flash sequence finished successfully.
     Complete,
+    /// Flash sequence failed.
     Error(String),
 }
 
@@ -103,6 +130,55 @@ pub fn prepare_patch_for_flash(data: &[u8], crypto: &dyn BlockCrypto) -> Vec<u8>
     crypto.encrypt(data)
 }
 
+// ── Windows timer resolution ─────────────────────────────────────────────────
+
+/// RAII guard that sets the Windows multimedia timer resolution to 1 ms for the
+/// duration of the flash sequence.  Without this, `std::thread::sleep` and
+/// `tokio::time::sleep` on Windows quantize to the default system tick of
+/// ~15.625 ms, making software ISO-TP (which sleeps for STmin between each
+/// consecutive frame) roughly 30× slower than necessary.
+///
+/// On non-Windows platforms this is a no-op.
+#[cfg(windows)]
+struct HighResTimerGuard;
+
+#[cfg(windows)]
+impl HighResTimerGuard {
+    fn activate() -> Self {
+        #[link(name = "winmm")]
+        extern "system" {
+            fn timeBeginPeriod(uPeriod: u32) -> u32;
+        }
+        let ret = unsafe { timeBeginPeriod(1) };
+        if ret == 0 {
+            tracing::debug!("timeBeginPeriod(1) OK — timer resolution set to 1 ms");
+        } else {
+            tracing::warn!("timeBeginPeriod(1) returned {ret}");
+        }
+        Self
+    }
+}
+
+#[cfg(windows)]
+impl Drop for HighResTimerGuard {
+    fn drop(&mut self) {
+        #[link(name = "winmm")]
+        extern "system" {
+            fn timeEndPeriod(uPeriod: u32) -> u32;
+        }
+        let ret = unsafe { timeEndPeriod(1) };
+        tracing::debug!("timeEndPeriod(1) returned {ret}");
+    }
+}
+
+#[cfg(not(windows))]
+struct HighResTimerGuard;
+
+#[cfg(not(windows))]
+impl HighResTimerGuard {
+    fn activate() -> Self { Self }
+}
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Flash a set of prepared blocks to an ECU.
@@ -115,6 +191,10 @@ pub async fn flash_blocks(
     blocks: Vec<PreparedBlockData>,
     opts: FlashOptions,
 ) -> Result<(), FlashError> {
+    // Raise timer resolution for the duration of the flash so that sub-ms
+    // sleeps (STmin, process-loop yield) don't round up to 15.625 ms.
+    let _timer_guard = HighResTimerGuard::activate();
+
     tracing::info!(
         interface = %opts.interface,
         project = flash_info.project_name,
@@ -199,15 +279,19 @@ async fn flash_via_j2534(
         // flash channel share the same device handle so we never call
         // PassThruClose between channels (which disconnects the USB device
         // and prevents a subsequent PassThruOpen from succeeding).
-        let mut device = crate::j2534_common::open_device(dll)
+        let mut device = automotive::j2534::open_device(dll)
             .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
 
         // VW ECUs require an OBD-II DTC clear before the programming
         // precondition check.  Open a temporary ISO 15765 channel on the
         // OBD-II IDs, send mode 04, then disconnect the channel (keeping
         // the device open) before opening the main flash channel.
-        match crate::j2534_isotp_adapter::J2534NativeIsoTpTransport::open_on_device(
-            device, bitrate, 0x700, 0x7E8, None,
+        send_progress(opts, ProgressUpdate::ClearingDtcs);
+        match automotive::j2534::J2534NativeIsoTpTransport::open_on_device(
+            device, bitrate,
+            Identifier::Standard(0x700),
+            Identifier::Standard(0x7E8),
+            None,
         ) {
             Ok(obd) => {
                 send_obd_dtc_clear(&obd).await;
@@ -222,9 +306,9 @@ async fn flash_via_j2534(
             }
         }
 
-        let tx_id = flash_info.control_module_identifier.txid;
-        let rx_id = flash_info.control_module_identifier.rxid;
-        let transport = crate::j2534_isotp_adapter::J2534NativeIsoTpTransport::open_on_device(
+        let tx_id = Identifier::from(flash_info.control_module_identifier.txid);
+        let rx_id = Identifier::from(flash_info.control_module_identifier.rxid);
+        let transport = automotive::j2534::J2534NativeIsoTpTransport::open_on_device(
             device,
             bitrate,
             tx_id,
@@ -236,7 +320,7 @@ async fn flash_via_j2534(
         tokio::task::spawn_blocking(move || drop(transport));
         result
     } else {
-        let j = crate::j2534_adapter::J2534CanAdapter::open(dll, bitrate)
+        let j = automotive::j2534::J2534CanAdapter::open(dll, bitrate)
             .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
         let adapter = AsyncCanAdapter::new(j);
         let result = run_with_adapter(&adapter, flash_info, blocks, opts).await;
@@ -301,6 +385,7 @@ async fn run_with_adapter(
 ) -> Result<(), FlashError> {
     // VW ECUs require an OBD-II DTC clear before programming precondition check.
     // This must be sent on a separate channel (0x700 → 0x7E8) before the UDS session.
+    send_progress(opts, ProgressUpdate::ClearingDtcs);
     send_obd_dtc_clear_via_adapter(adapter).await;
 
     let mut config = make_isotp_config(flash_info);
@@ -401,8 +486,10 @@ async fn run_flash_sequence<T: IsoTpTransport>(
         }
     };
     tracing::info!(%vin, "Connected");
+    send_progress(opts, ProgressUpdate::ReadVin { vin });
 
     // 3. Check programming precondition
+    send_progress(opts, ProgressUpdate::CheckingPreconditions);
     tracing::info!("Checking programming precondition (0x0203)");
     uds.routine_control(RoutineControlType::Start, 0x0203, None).await?;
 
@@ -412,6 +499,7 @@ async fn run_flash_sequence<T: IsoTpTransport>(
     // 5. Upgrade to programming session
     //    SwitchPatch fallback: if the normal request is refused, send `3E 10 02`
     //    (a CBOOT-patch trick that bypasses session conditions).
+    send_progress(opts, ProgressUpdate::ProgrammingSession);
     tracing::info!("Upgrading to programming session");
     if let Err(e) = uds.diagnostic_session_control(0x02).await {
         tracing::warn!("Normal programming session request failed ({e}), trying SwitchPatch");
@@ -441,6 +529,7 @@ async fn run_flash_sequence<T: IsoTpTransport>(
     uds.tester_present().await?;
 
     // 9. Write workshop code
+    send_progress(opts, ProgressUpdate::WritingWorkshopCode);
     tracing::info!("Writing workshop code to DID 0xF15A");
     uds.write_data_by_identifier(0xF15A, &opts.workshop_code).await?;
 
@@ -456,9 +545,9 @@ async fn run_flash_sequence<T: IsoTpTransport>(
             total,
         });
         if block.block_number <= 5 {
-            flash_normal_block(uds, flash_info, block).await?;
+            flash_normal_block(uds, flash_info, block, opts).await?;
         } else {
-            flash_patch_block(uds, flash_info, block).await?;
+            flash_patch_block(uds, flash_info, block, opts).await?;
         }
         send_progress(opts, ProgressUpdate::BlockComplete { index });
         uds.tester_present().await?;
@@ -474,6 +563,7 @@ async fn run_flash_sequence<T: IsoTpTransport>(
 
     // 14. ECU reset — the ECU hard-resets immediately and typically does not
     //     send a response before power-cycling, so a timeout is expected and OK.
+    send_progress(opts, ProgressUpdate::EcuReset);
     tracing::info!("Resetting ECU");
     match uds.ecu_reset(0x01).await {
         Ok(_) => {}
@@ -493,6 +583,7 @@ async fn flash_normal_block<T: IsoTpTransport>(
     uds: &UDSClient<'_, T>,
     flash_info: &FlashInfo,
     block: &PreparedBlockData,
+    opts: &FlashOptions,
 ) -> Result<(), FlashError> {
     let block_id = flash_info
         .block_identifier(block.block_number)
@@ -507,6 +598,7 @@ async fn flash_normal_block<T: IsoTpTransport>(
 
     // Erase
     if block.should_erase {
+        send_progress(opts, ProgressUpdate::BlockErasing { name: block.block_name.clone() });
         tracing::debug!(block = block.block_number, "Erasing (0xFF00)");
         uds.routine_control(
             RoutineControlType::Start,
@@ -521,6 +613,7 @@ async fn flash_normal_block<T: IsoTpTransport>(
         .ok_or_else(|| FlashError::Config(format!("No block_length for block {}", block.block_number)))?;
     let size_be = (block_len as u32).to_be_bytes();
 
+    send_progress(opts, ProgressUpdate::BlockDownloading { name: block.block_name.clone() });
     tracing::debug!(block = block.block_number, "RequestDownload");
     let max_chunk = uds.request_download(
         block.compression_type,
@@ -543,6 +636,7 @@ async fn flash_normal_block<T: IsoTpTransport>(
     );
 
     let data = &block.block_encrypted_bytes;
+    let data_len = data.len();
     let mut counter: u8 = 1;
     let mut offset = 0;
     while offset < data.len() {
@@ -550,12 +644,18 @@ async fn flash_normal_block<T: IsoTpTransport>(
         uds.transfer_data(counter, Some(&data[offset..end])).await?;
         counter = counter.wrapping_add(1);
         offset = end;
+        send_progress(opts, ProgressUpdate::BlockTransferProgress {
+            name: block.block_name.clone(),
+            bytes_sent: offset,
+            bytes_total: data_len,
+        });
     }
 
     // Exit transfer
     uds.request_transfer_exit(None).await?;
 
     // Checksum routine: data = [0x01, block_id, 0x00, 0x04, <4-byte UDS checksum>]
+    send_progress(opts, ProgressUpdate::BlockChecksum { name: block.block_name.clone() });
     let mut checksum_data = vec![0x01u8, block_id, 0x00, 0x04];
     checksum_data.extend_from_slice(&block.uds_checksum);
     tracing::debug!(block = block.block_number, "Checksum routine (0x0202)");
@@ -577,6 +677,7 @@ async fn flash_patch_block<T: IsoTpTransport>(
     uds: &UDSClient<'_, T>,
     flash_info: &FlashInfo,
     block: &PreparedBlockData,
+    opts: &FlashOptions,
 ) -> Result<(), FlashError> {
     // Patch block N+5 targets actual block N (e.g. block 7 → target block 2).
     let target_num = block.block_number - 5;
@@ -588,6 +689,7 @@ async fn flash_patch_block<T: IsoTpTransport>(
     );
 
     // Step 1: Erase CAL (block 5) before patching
+    send_progress(opts, ProgressUpdate::BlockErasing { name: block.block_name.clone() });
     let cal_id = flash_info
         .block_identifier(5)
         .ok_or_else(|| FlashError::Config("No block_identifier for CAL (block 5)".into()))?;
@@ -598,6 +700,7 @@ async fn flash_patch_block<T: IsoTpTransport>(
     ).await?;
 
     // Step 2: RequestDownload for the target block; encryption 0xA, compression 0x0
+    send_progress(opts, ProgressUpdate::BlockDownloading { name: block.block_name.clone() });
     let block_len = flash_info
         .block_length(target_num)
         .ok_or_else(|| FlashError::Config(format!("No block_length for target block {target_num}")))?;
@@ -615,6 +718,7 @@ async fn flash_patch_block<T: IsoTpTransport>(
         .ok_or_else(|| FlashError::Config("No patch_info for this ECU".into()))?;
 
     let data = &block.block_encrypted_bytes;
+    let data_len = data.len();
     let mut counter: u8 = 1;
     let mut offset = 0;
     while offset < data.len() {
@@ -635,6 +739,11 @@ async fn flash_patch_block<T: IsoTpTransport>(
             }
         }
         offset = end;
+        send_progress(opts, ProgressUpdate::BlockTransferProgress {
+            name: block.block_name.clone(),
+            bytes_sent: offset,
+            bytes_total: data_len,
+        });
     }
 
     // Step 4: Exit transfer (no checksum for patch blocks)
@@ -683,9 +792,9 @@ async fn read_ecu_via_j2534(
     flash_info: &FlashInfo,
 ) -> Result<HashMap<String, String>, FlashError> {
     if native_isotp {
-        let tx_id = flash_info.control_module_identifier.txid;
-        let rx_id = flash_info.control_module_identifier.rxid;
-        let transport = crate::j2534_isotp_adapter::J2534NativeIsoTpTransport::open(
+        let tx_id = Identifier::from(flash_info.control_module_identifier.txid);
+        let rx_id = Identifier::from(flash_info.control_module_identifier.rxid);
+        let transport = automotive::j2534::J2534NativeIsoTpTransport::open(
             dll,
             bitrate,
             tx_id,
@@ -699,7 +808,7 @@ async fn read_ecu_via_j2534(
         tokio::task::spawn_blocking(move || drop(transport));
         result
     } else {
-        let j = crate::j2534_adapter::J2534CanAdapter::open(dll, bitrate)
+        let j = automotive::j2534::J2534CanAdapter::open(dll, bitrate)
             .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
         let adapter = AsyncCanAdapter::new(j);
         let result = read_ecu_with_adapter(&adapter, flash_info).await;

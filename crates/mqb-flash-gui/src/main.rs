@@ -65,6 +65,8 @@ struct State {
     progress_step: String,
     /// Total block count for the current flash (used by BlockComplete).
     total_blocks: usize,
+    /// Progress bar value at the start of the current block (set by FlashingBlock).
+    block_progress_base: f32,
     /// Monotonically increasing counter, used as subscription id.
     op_id: u64,
 }
@@ -84,6 +86,7 @@ impl Default for State {
             progress: 0.0,
             progress_step: String::new(),
             total_blocks: 1,
+            block_progress_base: 0.0,
             op_id: 0,
         }
     }
@@ -100,27 +103,14 @@ impl State {
         match self.interface_kind {
             InterfaceKind::Panda => Some(Interface::Panda),
             InterfaceKind::SocketCan => {
-                if self.socketcan_name.is_empty() {
-                    None
-                } else {
-                    Some(Interface::SocketCan(self.socketcan_name.clone()))
-                }
+                (!self.socketcan_name.is_empty())
+                    .then(|| Interface::SocketCan(self.socketcan_name.clone()))
             }
-            InterfaceKind::J2534 => {
-                let dll = if self.j2534_dll_path.is_empty() {
-                    None
-                } else {
-                    Some(self.j2534_dll_path.clone())
-                };
-                Some(Interface::J2534 { dll, bitrate: 500_000, native_isotp: false })
-            }
-            InterfaceKind::J2534IsoTp => {
-                let dll = if self.j2534_dll_path.is_empty() {
-                    None
-                } else {
-                    Some(self.j2534_dll_path.clone())
-                };
-                Some(Interface::J2534 { dll, bitrate: 500_000, native_isotp: true })
+            InterfaceKind::J2534 | InterfaceKind::J2534IsoTp => {
+                let native_isotp = matches!(self.interface_kind, InterfaceKind::J2534IsoTp);
+                let dll = (!self.j2534_dll_path.is_empty())
+                    .then(|| self.j2534_dll_path.clone());
+                Some(Interface::J2534 { dll, bitrate: 500_000, native_isotp })
             }
         }
     }
@@ -640,29 +630,108 @@ fn prepare_unlock(
 
 // ─── Progress handling ────────────────────────────────────────────────────────
 
+// Progress bar layout:
+//   0.00 – 0.10  setup (DTC clear, connect, auth, workshop code)
+//   0.10 – 0.90  block transfers (80% of the bar)
+//   0.90 – 0.95  verify programming dependencies
+//   0.95 – 1.00  ECU reset → complete
+const PROGRESS_SETUP_END: f32 = 0.10;
+const PROGRESS_BLOCKS_START: f32 = 0.10;
+const PROGRESS_BLOCKS_END: f32 = 0.90;
+const PROGRESS_VERIFY: f32 = 0.92;
+const PROGRESS_RESET: f32 = 0.96;
+
+/// Map a block-relative fraction (0..1 across all blocks) into the bar's block range.
+fn block_progress(frac: f32) -> f32 {
+    PROGRESS_BLOCKS_START + frac * (PROGRESS_BLOCKS_END - PROGRESS_BLOCKS_START)
+}
+
 fn handle_progress(state: &mut State, update: ProgressUpdate) {
     match &update {
+        ProgressUpdate::ClearingDtcs => {
+            state.progress = 0.01;
+            state.progress_step = "Clearing DTCs...".into();
+            state.log("Clearing OBD-II DTCs...");
+        }
         ProgressUpdate::Connecting => {
+            state.progress = 0.02;
             state.progress_step = "Connecting...".into();
-            state.log("Connecting to ECU...");
+            state.log("Opening extended diagnostic session...");
+        }
+        ProgressUpdate::ReadVin { vin } => {
+            state.progress = 0.03;
+            state.progress_step = format!("Connected — VIN: {vin}");
+            state.log(format!("VIN: {vin}"));
+        }
+        ProgressUpdate::CheckingPreconditions => {
+            state.progress = 0.04;
+            state.progress_step = "Checking preconditions...".into();
+            state.log("Checking programming preconditions...");
+        }
+        ProgressUpdate::ProgrammingSession => {
+            state.progress = 0.05;
+            state.progress_step = "Programming session...".into();
+            state.log("Upgrading to programming session...");
         }
         ProgressUpdate::Authenticating => {
+            state.progress = 0.07;
             state.progress_step = "Authenticating (SA2)...".into();
             state.log("Performing SA2 seed-key authentication...");
         }
+        ProgressUpdate::WritingWorkshopCode => {
+            state.progress = PROGRESS_SETUP_END;
+            state.progress_step = "Writing workshop code...".into();
+        }
         ProgressUpdate::FlashingBlock { name, index, total } => {
             state.total_blocks = *total;
-            state.progress = *index as f32 / (*total).max(1) as f32;
+            let base = block_progress(*index as f32 / (*total).max(1) as f32);
+            state.progress = base;
+            state.block_progress_base = base;
             state.progress_step =
                 format!("Flashing block {} ({}/{})", name, index + 1, total);
             state.log(format!("Flashing {} ({}/{})", name, index + 1, total));
         }
+        ProgressUpdate::BlockErasing { name } => {
+            state.progress_step = format!("Erasing {name}...");
+            state.log(format!("Erasing {name}..."));
+        }
+        ProgressUpdate::BlockDownloading { name } => {
+            state.progress_step = format!("Requesting download: {name}...");
+        }
+        ProgressUpdate::BlockTransferProgress { name, bytes_sent, bytes_total } => {
+            let pct = if *bytes_total > 0 {
+                *bytes_sent as f32 / *bytes_total as f32
+            } else {
+                0.0
+            };
+            // Interpolate within this block's slice of the blocks range.
+            // block_progress_base was set by FlashingBlock and stays fixed for
+            // all chunks within this block, avoiding compounding drift.
+            let block_slice = (PROGRESS_BLOCKS_END - PROGRESS_BLOCKS_START)
+                / state.total_blocks.max(1) as f32;
+            state.progress = state.block_progress_base + pct * block_slice;
+            state.progress_step = format!(
+                "Transferring {name}: {}/{} KB ({:.0}%)",
+                bytes_sent / 1024,
+                bytes_total / 1024,
+                pct * 100.0,
+            );
+        }
+        ProgressUpdate::BlockChecksum { name } => {
+            state.progress_step = format!("Verifying checksum: {name}...");
+        }
         ProgressUpdate::BlockComplete { index } => {
-            state.progress = (*index + 1) as f32 / state.total_blocks.max(1) as f32;
+            state.progress = block_progress((*index + 1) as f32 / state.total_blocks.max(1) as f32);
         }
         ProgressUpdate::Verifying => {
+            state.progress = PROGRESS_VERIFY;
             state.progress_step = "Verifying programming dependencies...".into();
             state.log("Verifying programming dependencies...");
+        }
+        ProgressUpdate::EcuReset => {
+            state.progress = PROGRESS_RESET;
+            state.progress_step = "Resetting ECU...".into();
+            state.log("Resetting ECU...");
         }
         ProgressUpdate::Complete => {
             state.progress = 1.0;
@@ -868,9 +937,7 @@ fn view(state: &State) -> Element<'_, Message> {
     let log_entries: Vec<Element<'_, Message>> = state
         .log_lines
         .iter()
-        .rev()
-        .take(200)
-        .rev()
+        .skip(state.log_lines.len().saturating_sub(200))
         .map(|line| text(line).size(12).into())
         .collect();
 

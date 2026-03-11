@@ -428,6 +428,7 @@ dependencies = [
  "bstr",
  "hex",
  "libc",
+ "libloading 0.8.9",
  "rusb",
  "socket2",
  "strum",
@@ -436,6 +437,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "winreg",
 ]
 
 [[package]]
@@ -2439,10 +2441,7 @@ dependencies = [
 name = "mqb-flash-uds"
 version = "0.1.0"
 dependencies = [
- "async-stream",
  "automotive",
- "hex",
- "libloading 0.8.9",
  "mqb-bytes",
  "mqb-isotp",
  "mqb-lzss",
@@ -2452,7 +2451,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "winreg",
 ]
 
 [[package]]
@@ -2485,7 +2483,6 @@ name = "mqb-lzss"
 version = "0.1.0"
 dependencies = [
  "mqb-bytes",
- "thiserror 1.0.69",
 ]
 
 [[package]]
