@@ -4,12 +4,8 @@ use mqb_a2l::reader::{AddressMap, CharacteristicValues, make_resolver, read_char
 use mqb_a2l::CharacteristicType;
 
 fn main() {
-    let a2l_path = std::env::args().nth(1).unwrap_or_else(|| {
-        "example.a2l".to_string()
-    });
-    let bin_path = std::env::args().nth(2).unwrap_or_else(|| {
-        "example.bin".to_string()
-    });
+    let a2l_path = std::env::args().nth(1).expect("Usage: read_chars <a2l_file> <bin_file>");
+    let bin_path = std::env::args().nth(2).expect("Usage: read_chars <a2l_file> <bin_file>");
 
     eprintln!("Loading A2L...");
     let t0 = Instant::now();

@@ -19,6 +19,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Claude Code local settings
+.claude/
+
 # Editor / IDE
 .vscode/
 .idea/
