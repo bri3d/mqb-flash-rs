@@ -20,9 +20,8 @@ use tokio::sync::broadcast;
 use crate::can::{CanAdapter, Frame, Identifier};
 
 use super::common::{
-    self, FnPassThruConnect, FnPassThruDisconnect, FnPassThruClose,
-    FnPassThruOpen, FnPassThruReadMsgs, FnPassThruStartMsgFilter, FnPassThruWriteMsgs,
-    PassThruMsg, STATUS_NOERROR, ERR_BUFFER_EMPTY, ERR_TIMEOUT,
+    self, FnPassThruDisconnect, FnPassThruReadMsgs, FnPassThruWriteMsgs,
+    J2534Device, PassThruMsg, STATUS_NOERROR, ERR_BUFFER_EMPTY, ERR_TIMEOUT,
     parse_can_id,
 };
 
@@ -64,75 +63,57 @@ pub struct J2534CanAdapter {
     stop_rx: Arc<AtomicBool>,
     tx_thread: Option<thread::JoinHandle<()>>,
     rx_thread: Option<thread::JoinHandle<()>>,
-    // ── Cleanup state (used in Drop after threads are joined) ──────────────
     channel_id: u32,
-    device_id: u32,
     pass_thru_disconnect: FnPassThruDisconnect,
-    pass_thru_close: FnPassThruClose,
-    /// Keeps the PassThru DLL loaded for the lifetime of this adapter.
-    _lib: libloading::Library,
+    /// The underlying device handle; taken by `into_device()`.
+    device: Option<J2534Device>,
 }
 
 impl J2534CanAdapter {
     /// Open a J2534 CAN channel and start the TX/RX background threads.
     ///
+    /// Opens a new device via [`open_device`](super::open_device).  To reuse
+    /// an already-open device, use [`open_on_device`](Self::open_on_device).
+    ///
     /// * `dll_path` — path to the PassThru DLL, or `None` to auto-discover
     ///   the first 64-bit driver from the Windows registry.
     /// * `bitrate` — CAN bitrate in bits/sec (e.g. `500_000`).
     pub fn open(dll_path: Option<&str>, bitrate: u32) -> Result<Self, String> {
-        let path = common::resolve_dll_path(dll_path)?;
+        let device = common::open_device(dll_path)?;
+        Self::open_on_device(device, bitrate)
+            .map_err(|(msg, _device)| msg)
+    }
 
-        // ── Load DLL ──────────────────────────────────────────────────────
-        let lib = match unsafe { libloading::Library::new(&path) } {
-            Ok(l) => l,
-            Err(e) => return Err(format!("Cannot load {path}: {e}")),
-        };
-
-        macro_rules! sym {
-            ($name:literal, $ty:ty) => {
-                match unsafe { lib.get::<$ty>($name) } {
-                    Ok(s) => *s,
-                    Err(e) => {
-                        return Err(format!(
-                            "Symbol {} not found in {path}: {e}",
-                            std::str::from_utf8($name).unwrap_or("?")
-                        ));
-                    }
-                }
-            };
-        }
-
-        let pass_thru_open       = sym!(b"PassThruOpen\0",           FnPassThruOpen);
-        let pass_thru_close      = sym!(b"PassThruClose\0",          FnPassThruClose);
-        let pass_thru_connect    = sym!(b"PassThruConnect\0",        FnPassThruConnect);
-        let pass_thru_disconnect = sym!(b"PassThruDisconnect\0",     FnPassThruDisconnect);
-        let pass_thru_read       = sym!(b"PassThruReadMsgs\0",       FnPassThruReadMsgs);
-        let pass_thru_write      = sym!(b"PassThruWriteMsgs\0",      FnPassThruWriteMsgs);
-        let pass_thru_filter     = sym!(b"PassThruStartMsgFilter\0", FnPassThruStartMsgFilter);
-
-        // ── Open device ────────────────────────────────────────────────────
-        let mut device_id: u32 = 0;
-        let ret = unsafe { pass_thru_open(std::ptr::null(), &mut device_id) };
-        tracing::debug!(ret = common::status_str(ret), device_id, "PassThruOpen");
-        if ret != STATUS_NOERROR {
-            return Err(format!(
-                "PassThruOpen failed: 0x{ret:02X} ({})",
-                common::status_str(ret)
-            ));
-        }
+    /// Open a CAN channel on an already-open [`J2534Device`].
+    ///
+    /// This avoids closing and reopening the physical device when switching
+    /// channels (e.g. reusing the same adapter for CAN after an ISO 15765
+    /// channel was closed).
+    ///
+    /// On error, the [`J2534Device`] is returned alongside the error message
+    /// so the caller can reuse it.
+    pub fn open_on_device(
+        device: J2534Device,
+        bitrate: u32,
+    ) -> Result<Self, (String, J2534Device)> {
+        let device_id = device.device_id;
+        let pass_thru_connect = device.connect;
+        let pass_thru_disconnect = device.disconnect;
+        let pass_thru_read = device.read;
+        let pass_thru_write = device.write;
+        let pass_thru_filter = device.filter;
 
         // ── Open CAN channel ───────────────────────────────────────────────
         let mut channel_id: u32 = 0;
         let ret = unsafe {
             pass_thru_connect(device_id, PROTOCOL_CAN, 0, bitrate, &mut channel_id)
         };
-        tracing::debug!(ret = common::status_str(ret), channel_id, bitrate, "PassThruConnect");
+        tracing::debug!(ret = common::status_str(ret), channel_id, bitrate, "PassThruConnect CAN");
         if ret != STATUS_NOERROR {
-            unsafe { pass_thru_close(device_id) };
-            return Err(format!(
+            return Err((format!(
                 "PassThruConnect (CAN, {bitrate} bps) failed: 0x{ret:02X} ({})",
                 common::status_str(ret)
-            ));
+            ), device));
         }
 
         // ── Install pass-all receive filter ───────────────────────────────
@@ -152,11 +133,10 @@ impl J2534CanAdapter {
         tracing::debug!(ret = common::status_str(ret), filter_id, "PassThruStartMsgFilter");
         if ret != STATUS_NOERROR {
             unsafe { pass_thru_disconnect(channel_id) };
-            unsafe { pass_thru_close(device_id) };
-            return Err(format!(
+            return Err((format!(
                 "PassThruStartMsgFilter (PASS, pass-all) failed: 0x{ret:02X} ({})",
                 common::status_str(ret)
-            ));
+            ), device));
         }
 
         // ── Create channels and spawn threads ─────────────────────────────
@@ -170,7 +150,11 @@ impl J2534CanAdapter {
             thread::Builder::new()
                 .name("j2534-can-tx".to_owned())
                 .spawn(move || can_tx_thread(channel_id, pass_thru_write, rx_cmd, bcast, stop))
-                .map_err(|e| format!("Failed to spawn J2534 CAN TX thread: {e}"))?
+                .map_err(|e| format!("Failed to spawn J2534 CAN TX thread: {e}"))
+        };
+        let tx_thread = match tx_thread {
+            Ok(h) => h,
+            Err(e) => return Err((e, device)),
         };
 
         let rx_thread = {
@@ -178,7 +162,11 @@ impl J2534CanAdapter {
             thread::Builder::new()
                 .name("j2534-can-rx".to_owned())
                 .spawn(move || can_rx_thread(channel_id, pass_thru_read, bcast_tx, stop))
-                .map_err(|e| format!("Failed to spawn J2534 CAN RX thread: {e}"))?
+                .map_err(|e| format!("Failed to spawn J2534 CAN RX thread: {e}"))
+        };
+        let rx_thread = match rx_thread {
+            Ok(h) => h,
+            Err(e) => return Err((e, device)),
         };
 
         Ok(Self {
@@ -188,16 +176,19 @@ impl J2534CanAdapter {
             tx_thread: Some(tx_thread),
             rx_thread: Some(rx_thread),
             channel_id,
-            device_id,
             pass_thru_disconnect,
-            pass_thru_close,
-            _lib: lib,
+            device: Some(device),
         })
     }
-}
 
-impl Drop for J2534CanAdapter {
-    fn drop(&mut self) {
+    /// Disconnect the CAN channel and return the underlying [`J2534Device`]
+    /// so it can be reused for another channel.
+    pub fn into_device(mut self) -> J2534Device {
+        self.shutdown_channel();
+        self.device.take().expect("device already taken")
+    }
+
+    fn shutdown_channel(&mut self) {
         // Signal TX thread to stop (its recv() will return Err).
         drop(self.tx_cmd.take());
         // Signal RX thread to stop.
@@ -215,8 +206,14 @@ impl Drop for J2534CanAdapter {
         if let Some(h) = self.rx_thread.take() {
             let _ = h.join();
         }
-        let ret = unsafe { (self.pass_thru_close)(self.device_id) };
-        tracing::trace!(ret = common::status_str(ret), "PassThruClose");
+    }
+}
+
+impl Drop for J2534CanAdapter {
+    fn drop(&mut self) {
+        self.shutdown_channel();
+        // Drop the device (calls PassThruClose).
+        drop(self.device.take());
     }
 }
 
@@ -255,7 +252,6 @@ impl CanAdapter for J2534CanAdapter {
                 }
                 Err(broadcast::error::TryRecvError::Lagged(n)) => {
                     tracing::warn!(dropped = n, "J2534 CAN RX broadcast lagged — frames dropped");
-                    // Continue; the next try_recv() picks up current frames.
                 }
             }
         }

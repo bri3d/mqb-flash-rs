@@ -424,22 +424,20 @@ fn isotp_rx_thread(
                 if len < 4 {
                     continue;
                 }
+                let src_id = parse_can_id(&msg.data);
+                let src_raw: u32 = src_id.into();
+                let payload = &msg.data[4..len];
                 if msg.rx_status != 0 {
-                    let src_id = parse_can_id(&msg.data);
-                    let src_raw: u32 = src_id.into();
-                    let payload = &msg.data[4..len];
                     tracing::debug!(
                         rx_status = format_args!("0x{:04X}", msg.rx_status),
                         src_id = format_args!("{src_raw:08X}"),
-                        data_size = len - 4,
+                        data_size = payload.len(),
                         payload = %hex::encode(&payload[..payload.len().min(16)]),
                         "J2534 ISO15765 skipping non-data frame"
                     );
                     continue;
                 }
-                let pdu = msg.data[4..len].to_vec();
-                let src_id = parse_can_id(&msg.data);
-                let src_raw: u32 = src_id.into();
+                let pdu = payload.to_vec();
                 tracing::debug!(
                     src_id = format_args!("{src_raw:08X}"),
                     len = pdu.len(),
