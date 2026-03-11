@@ -1,0 +1,121 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: windows-x64
+            features: "--features mqb-flash-cli/j2534,mqb-flash-gui/j2534"
+            ext: .exe
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+            suffix: windows-x86
+            features: "--features mqb-flash-cli/j2534,mqb-flash-gui/j2534"
+            ext: .exe
+          # Linux
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-x64
+            features: ""
+            ext: ""
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            suffix: linux-arm64
+            features: ""
+            ext: ""
+          # macOS
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            suffix: macos-x64
+            features: ""
+            ext: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            suffix: macos-arm64
+            features: ""
+            ext: ""
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev libvulkan-dev
+
+      - name: Build release binaries
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          BIN_DIR="target/${{ matrix.target }}/release"
+          for bin in mqb-flash mqb-flash-gui mqb-a2l-viewer mqb-logger-gui; do
+            if [ -f "$BIN_DIR/${bin}${{ matrix.ext }}" ]; then
+              cp "$BIN_DIR/${bin}${{ matrix.ext }}" "dist/${bin}-${{ matrix.suffix }}${{ matrix.ext }}"
+            fi
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binaries-${{ matrix.suffix }}
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release create "$TAG_NAME" dist/* --generate-notes
