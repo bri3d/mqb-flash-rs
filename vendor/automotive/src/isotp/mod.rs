@@ -58,6 +58,7 @@ impl IsoTpTransport for IsoTPAdapter<'_> {
         IsoTPAdapter::recv(self)
     }
 }
+
 const DEFAULT_PADDING_BYTE: u8 = 0xAA;
 
 /// N_WFTmax in ISO 15765-2
@@ -67,7 +68,7 @@ const CAN_MAX_DLEN: usize = 8;
 const CAN_FD_MAX_DLEN: usize = 64;
 
 const ISO_TP_MAX_DLEN: usize = (1 << 12) - 1;
-const ISO_TP_FD_MAX_DLEN: usize = 0xFFFF_FFFF;
+const ISO_TP_FD_MAX_DLEN: usize = u32::MAX as usize;
 
 /// Configuring passed to the IsoTPAdapter.
 #[derive(Debug, Clone, Copy)]
