@@ -9,5 +9,5 @@ pub use flash::{FlashError, FlashOptions, ProgressUpdate, flash_blocks, read_ecu
 pub use fake_adapter::FakeCanAdapter;
 pub use mqb_sa2::Sa2Vm;
 #[cfg(feature = "j2534")]
-pub use automotive::j2534::{J2534CanAdapter, J2534NativeIsoTpTransport, J2534Device};
+pub use automotive::j2534::{J2534CanAdapter, J2534NativeIsoTpTransport};
 pub use automotive::IsoTpTransport;

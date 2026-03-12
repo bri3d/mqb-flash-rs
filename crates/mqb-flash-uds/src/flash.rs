@@ -32,6 +32,9 @@ use mqb_sa2::Sa2Vm;
 use crate::fake_adapter::FakeCanAdapter;
 use crate::interface::Interface;
 
+#[cfg(feature = "j2534")]
+use automotive::j2534::J2534NativeIsoTpTransport;
+
 // ── Error type ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
@@ -275,77 +278,66 @@ async fn flash_via_j2534(
     opts: &FlashOptions,
 ) -> Result<(), FlashError> {
     if native_isotp {
-        // Open the J2534 device once; the OBD DTC-clear channel and the main
-        // flash channel share the same device handle so we never call
-        // PassThruClose between channels (which disconnects the USB device
-        // and prevents a subsequent PassThruOpen from succeeding).
-        let mut device = automotive::j2534::open_device(dll)
-            .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
-
         // VW ECUs require an OBD-II DTC clear before the programming
-        // precondition check.  Open a temporary ISO 15765 channel on the
-        // OBD-II IDs, send mode 04, then disconnect the channel (keeping
-        // the device open) before opening the main flash channel.
+        // precondition check.  Open a temporary ISO 15765 transport on the
+        // OBD-II IDs, send mode 04, then drop it before opening the main
+        // flash transport.
         send_progress(opts, ProgressUpdate::ClearingDtcs);
-        match automotive::j2534::J2534NativeIsoTpTransport::open_on_device(
-            device, bitrate,
+        let obd_config = IsoTPConfig::new_from_tx_rx(
+            0,
             Identifier::Standard(0x700),
             Identifier::Standard(0x7E8),
-            None,
-        ) {
+        );
+        match automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate, obd_config) {
             Ok(obd) => {
-                send_obd_dtc_clear(&obd).await;
-                // Disconnect the OBD channel and recover the device handle.
-                device = tokio::task::spawn_blocking(move || obd.into_device())
+                send_obd_dtc_clear::<J2534NativeIsoTpTransport>(&obd).await;
+                tokio::task::spawn_blocking(move || drop(obd))
                     .await
                     .map_err(|e| FlashError::Interface(format!("OBD channel teardown failed: {e}")))?;
             }
-            Err((e, dev)) => {
+            Err(e) => {
                 tracing::warn!("OBD DTC clear channel open failed: {e} (continuing)");
-                device = dev;
             }
         }
 
-        let tx_id = Identifier::from(flash_info.control_module_identifier.txid);
-        let rx_id = Identifier::from(flash_info.control_module_identifier.rxid);
-        let transport = automotive::j2534::J2534NativeIsoTpTransport::open_on_device(
-            device,
+        let mut flash_config = make_isotp_config(flash_info);
+        if let Some(stmin_us) = opts.stmin_override {
+            flash_config.separation_time_min = Some(std::time::Duration::from_micros(stmin_us as u64));
+        }
+        let transport = automotive::j2534::J2534NativeIsoTpTransport::new(
+            dll,
             bitrate,
-            tx_id,
-            rx_id,
-            opts.stmin_override,
+            flash_config,
         )
-        .map_err(|(e, _dev)| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
+        .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
         let result = run_with_transport(&transport, flash_info, blocks, opts).await;
 
+        // Drop the flash transport before opening a new one for post-reset DTC clear.
+        tokio::task::spawn_blocking(move || drop(transport))
+            .await
+            .map_err(|e| FlashError::Interface(format!("Flash channel teardown failed: {e}")))?;
+
         // After the ECU reboots, clear emission DTCs again (best-effort).
-        // Recover the device handle, open a temporary OBD channel, clear, then close.
         if result.is_ok() {
-            let dev = tokio::task::spawn_blocking(move || transport.into_device())
-                .await
-                .map_err(|e| FlashError::Interface(format!("Flash channel teardown failed: {e}")))?;
-            match automotive::j2534::J2534NativeIsoTpTransport::open_on_device(
-                dev, bitrate,
+            let obd_config = IsoTPConfig::new_from_tx_rx(
+                0,
                 Identifier::Standard(0x700),
                 Identifier::Standard(0x7E8),
-                None,
-            ) {
+            );
+            match automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate, obd_config) {
                 Ok(obd) => {
-                    send_obd_dtc_clear(&obd).await;
+                    send_obd_dtc_clear::<J2534NativeIsoTpTransport>(&obd).await;
                     tokio::task::spawn_blocking(move || drop(obd));
                 }
-                Err((e, dev)) => {
+                Err(e) => {
                     tracing::warn!("Post-reset OBD DTC clear channel open failed: {e} (continuing)");
-                    tokio::task::spawn_blocking(move || drop(dev));
                 }
             }
-        } else {
-            tokio::task::spawn_blocking(move || drop(transport));
         }
 
         result
     } else {
-        let j = automotive::j2534::J2534CanAdapter::open(dll, bitrate)
+        let j = automotive::j2534::J2534CanAdapter::new(dll, bitrate)
             .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
         let adapter = AsyncCanAdapter::new(j);
         let result = run_with_adapter(&adapter, flash_info, blocks, opts).await;
@@ -834,14 +826,11 @@ async fn read_ecu_via_j2534(
     flash_info: &FlashInfo,
 ) -> Result<HashMap<String, String>, FlashError> {
     if native_isotp {
-        let tx_id = Identifier::from(flash_info.control_module_identifier.txid);
-        let rx_id = Identifier::from(flash_info.control_module_identifier.rxid);
-        let transport = automotive::j2534::J2534NativeIsoTpTransport::open(
+        let config = make_isotp_config(flash_info);
+        let transport = automotive::j2534::J2534NativeIsoTpTransport::new(
             dll,
             bitrate,
-            tx_id,
-            rx_id,
-            None, // no stmin override needed for read-only ECU data queries
+            config,
         )
         .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
         let result = read_ecu_with_transport(&transport).await;
@@ -850,7 +839,7 @@ async fn read_ecu_via_j2534(
         tokio::task::spawn_blocking(move || drop(transport));
         result
     } else {
-        let j = automotive::j2534::J2534CanAdapter::open(dll, bitrate)
+        let j = automotive::j2534::J2534CanAdapter::new(dll, bitrate)
             .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
         let adapter = AsyncCanAdapter::new(j);
         let result = read_ecu_with_adapter(&adapter, flash_info).await;
