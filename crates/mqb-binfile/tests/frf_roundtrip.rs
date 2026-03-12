@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use mqb_checksum::{locate_ecm3_with_asw1, validate_ecm3, validate_haldex, validate_simos};
+use mqb_checksum::{locate_ecm3_with_asw1, validate_ecm3, validate_haldex, validate_simos_block};
 use mqb_modules::modules::haldex4motion::HALDEX_FLASH_INFO;
 use mqb_modules::modules::simos18::S18_FLASH_INFO;
 use mqb_modules::modules::simos1810::S1810_FLASH_INFO;
@@ -62,23 +62,12 @@ fn assert_all_checksums_valid(bin: &[u8], flash_info: &'static FlashInfo) {
     let split = mqb_binfile::blocks_from_bytes(bin, flash_info);
     assert!(!split.is_empty(), "binary should contain at least one recognisable block");
     for (name, block) in &split {
-        let (state, _) = validate_simos(flash_info, &block.block_bytes, block.block_number, false);
+        let (state, _) = validate_simos_block(flash_info, &block.block_bytes, block.block_number, false);
         assert_eq!(
             state,
             ChecksumState::Valid,
-            "block '{name}' should have a valid Simos checksum"
+            "block '{name}' should have valid Simos checksum(s)"
         );
-        // CBOOT has a secondary checksum (CBOOT_TEMP, block 6)
-        if flash_info.block_to_number("CBOOT") == Some(block.block_number)
-            && flash_info.checksum_block_location(6).is_some()
-        {
-            let (state2, _) = validate_simos(flash_info, &block.block_bytes, 6, false);
-            assert_eq!(
-                state2,
-                ChecksumState::Valid,
-                "block '{name}' should have a valid CBOOT_TEMP secondary checksum"
-            );
-        }
     }
 }
 
@@ -89,9 +78,9 @@ fn assert_all_valid(frf_path: &str, flash_info: &'static FlashInfo) {
     assert!(!by_name.is_empty(), "{frf_path}: no blocks extracted");
 
     for (name, block) in &by_name {
-        let (state, _) = validate_simos(flash_info, &block.block_bytes, block.block_number, false);
+        let (state, _) = validate_simos_block(flash_info, &block.block_bytes, block.block_number, false);
         assert_eq!(state, ChecksumState::Valid,
-            "{frf_path}: block '{name}' has invalid Simos checksum");
+            "{frf_path}: block '{name}' has invalid Simos checksum(s)");
     }
 
     let by_num: HashMap<u8, &BlockData> =
@@ -128,24 +117,11 @@ fn apply_cboot_patch_and_fix(bin: &mut [u8], flash_info: &'static FlashInfo) {
         .expect("CBOOT patch should find exactly 2 needle matches");
     bin[offset..end].copy_from_slice(&patched);
 
-    // Fix the primary CBOOT checksum
-    let fixed_bytes = {
-        let (state, fixed) =
-            mqb_checksum::validate_simos(flash_info, &bin[offset..end], block_num, true);
-        assert_ne!(state, ChecksumState::Valid, "checksum should be invalid after patching");
-        fixed.into_owned()
-    };
-    bin[offset..end].copy_from_slice(&fixed_bytes);
-
-    // Fix the secondary CBOOT_TEMP checksum (block 6, header at 0x340)
-    if flash_info.checksum_block_location(6).is_some() {
-        let fixed_bytes = {
-            let (_, fixed) =
-                mqb_checksum::validate_simos(flash_info, &bin[offset..end], 6, true);
-            fixed.into_owned()
-        };
-        bin[offset..end].copy_from_slice(&fixed_bytes);
-    }
+    // Fix both primary and secondary (CBOOT_TEMP) checksums
+    let (state, fixed) = validate_simos_block(flash_info, &bin[offset..end], block_num, true);
+    assert_ne!(state, ChecksumState::Valid, "checksum should be invalid after patching");
+    let fixed = fixed.into_owned();
+    bin[offset..end].copy_from_slice(&fixed);
 }
 
 // ── All FRF files: Simos block checksums + ECM3 ───────────────────────────────

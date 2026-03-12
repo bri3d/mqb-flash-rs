@@ -121,6 +121,40 @@ pub fn validate_simos<'a>(
     }
 }
 
+/// Validate (and optionally fix) a Simos block checksum, including the
+/// secondary CBOOT_TEMP header (block 6) when the block is CBOOT.
+///
+/// This is the correct entry point for production checksum fixing — it
+/// ensures both the primary and secondary CRC32 headers are handled.
+pub fn validate_simos_block<'a>(
+    flash_info: &FlashInfo,
+    data: &'a [u8],
+    block_num: u8,
+    fix: bool,
+) -> (ChecksumState, Cow<'a, [u8]>) {
+    let (s1, f1) = validate_simos(flash_info, data, block_num, fix);
+
+    // CBOOT has a secondary checksum header (CBOOT_TEMP = block 6, offset 0x340).
+    // Only attempt if this module has a CBOOT block matching block_num and a
+    // checksum location for block 6.
+    let is_cboot = flash_info
+        .block_to_number("CBOOT")
+        .map_or(false, |n| n == block_num);
+    if is_cboot && flash_info.checksum_block_location(6).is_some() {
+        let owned = f1.into_owned();
+        let (s2, f2) = validate_simos(flash_info, &owned, 6, fix);
+        let state = match (s1, s2) {
+            (ChecksumState::Valid, ChecksumState::Valid) => ChecksumState::Valid,
+            (ChecksumState::Failed, _) | (_, ChecksumState::Failed) => ChecksumState::Failed,
+            (ChecksumState::Invalid, _) | (_, ChecksumState::Invalid) => ChecksumState::Invalid,
+            _ => ChecksumState::Fixed,
+        };
+        (state, Cow::Owned(f2.into_owned()))
+    } else {
+        (s1, f1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

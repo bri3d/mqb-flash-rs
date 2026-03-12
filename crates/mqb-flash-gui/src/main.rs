@@ -11,7 +11,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length, Subscription, Task};
 
-use mqb_checksum::{validate_dq381, validate_dsg, validate_haldex, validate_simos};
+use mqb_checksum::{validate_dq381, validate_dsg, validate_haldex, validate_simos_block};
 use mqb_flash_uds::{
     flash_blocks, prepare_block_for_flash, prepare_patch_for_flash, read_ecu_data, FlashOptions,
     Interface, ProgressUpdate,
@@ -441,25 +441,7 @@ fn fix_block_checksum(
     block_num: u8,
 ) -> Result<Vec<u8>, String> {
     let (state, fixed) = match flash_info.checksum_kind {
-        ChecksumKind::Simos => {
-            let (s, f) = validate_simos(flash_info, &raw, block_num, true);
-            // CBOOT has a secondary checksum header (CBOOT_TEMP, block 6)
-            if flash_info.block_to_number("CBOOT") == Some(block_num)
-                && flash_info.checksum_block_location(6).is_some()
-            {
-                let primary = f.into_owned();
-                let (s2, f2) = validate_simos(flash_info, &primary, 6, true);
-                let final_state = match (s, s2) {
-                    (ChecksumState::Valid, ChecksumState::Valid) => ChecksumState::Valid,
-                    (ChecksumState::Failed, _) | (_, ChecksumState::Failed) => ChecksumState::Failed,
-                    (ChecksumState::Invalid, _) | (_, ChecksumState::Invalid) => ChecksumState::Invalid,
-                    _ => ChecksumState::Fixed,
-                };
-                (final_state, std::borrow::Cow::Owned(f2.into_owned()))
-            } else {
-                (s, f)
-            }
-        }
+        ChecksumKind::Simos => validate_simos_block(flash_info, &raw, block_num, true),
         ChecksumKind::Dq381 => {
             let base = mqb_modules::modules::dq381::BLOCK_BASE_ADDRESSES
                 .iter()

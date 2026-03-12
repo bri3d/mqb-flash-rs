@@ -13,7 +13,7 @@ mod dq381;
 mod dsg;
 mod haldex;
 
-pub use simos_crc::{crc32_simos, validate_simos};
+pub use simos_crc::{crc32_simos, validate_simos, validate_simos_block};
 pub use ecm3::{validate_ecm3, locate_ecm3_with_asw1, load_ecm3_location};
 pub use dq381::validate_dq381;
 pub use dsg::validate_dsg;

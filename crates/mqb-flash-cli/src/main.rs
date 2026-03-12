@@ -398,34 +398,6 @@ fn cmd_combine_bin(module: &str, block_args: &[String], output: &Path) -> Result
     Ok(())
 }
 
-/// Validate and fix a Simos block checksum, including the CBOOT_TEMP secondary
-/// header (block 6) when the block is CBOOT.
-fn validate_simos_with_cboot_temp<'a>(
-    flash_info: &FlashInfo,
-    data: &'a [u8],
-    block_num: u8,
-) -> (mqb_modules::ChecksumState, std::borrow::Cow<'a, [u8]>) {
-    use mqb_checksum::validate_simos;
-    use mqb_modules::ChecksumState;
-
-    let (s, f) = validate_simos(flash_info, data, block_num, true);
-    if flash_info.block_to_number("CBOOT") == Some(block_num)
-        && flash_info.checksum_block_location(6).is_some()
-    {
-        let primary = f.into_owned();
-        let (s2, f2) = validate_simos(flash_info, &primary, 6, true);
-        let final_state = match (s, s2) {
-            (ChecksumState::Valid, ChecksumState::Valid) => ChecksumState::Valid,
-            (ChecksumState::Failed, _) | (_, ChecksumState::Failed) => ChecksumState::Failed,
-            (ChecksumState::Invalid, _) | (_, ChecksumState::Invalid) => ChecksumState::Invalid,
-            _ => ChecksumState::Fixed,
-        };
-        (final_state, std::borrow::Cow::Owned(f2.into_owned()))
-    } else {
-        (s, f)
-    }
-}
-
 fn cmd_checksum(module: &str, file: &Path, output: &Path, patch_cboot: bool) -> Result<()> {
     use mqb_checksum::{validate_dq381, validate_dsg, validate_haldex};
     use mqb_modules::{ChecksumKind, ChecksumState};
@@ -467,7 +439,7 @@ fn cmd_checksum(module: &str, file: &Path, output: &Path, patch_cboot: bool) -> 
             }
             ChecksumKind::Dsg => validate_dsg(&block.block_bytes, true),
             ChecksumKind::Haldex => validate_haldex(&block.block_bytes, block_num, flash_info, true),
-            ChecksumKind::Simos => validate_simos_with_cboot_temp(flash_info, &block.block_bytes, block_num),
+            ChecksumKind::Simos => mqb_checksum::validate_simos_block(flash_info, &block.block_bytes, block_num, true),
         };
 
         match state {
