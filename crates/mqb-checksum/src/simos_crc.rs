@@ -137,9 +137,7 @@ pub fn validate_simos_block<'a>(
     // CBOOT has a secondary checksum header (CBOOT_TEMP = block 6, offset 0x340).
     // Only attempt if this module has a CBOOT block matching block_num and a
     // checksum location for block 6.
-    let is_cboot = flash_info
-        .block_to_number("CBOOT")
-        .map_or(false, |n| n == block_num);
+    let is_cboot = flash_info.block_to_number("CBOOT") == Some(block_num);
     if is_cboot && flash_info.checksum_block_location(6).is_some() {
         let owned = f1.into_owned();
         let (s2, f2) = validate_simos(flash_info, &owned, 6, fix);
