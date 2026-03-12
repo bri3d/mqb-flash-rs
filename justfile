@@ -22,12 +22,12 @@ test:
 
 # Build 64-bit release binaries (CLI + GUI + Logger + A2L Viewer)
 build-x64:
-    cargo build --release --package mqb-flash-cli --package mqb-flash-gui --package mqb-logger-gui --package mqb-a2l-viewer --target {{x64}}
+    cargo build --release --package mqb-flash-cli --package mqb-flash-gui --package mqb-logger-gui --package mqb-a2l-viewer --features mqb-flash-cli/j2534,mqb-flash-gui/j2534 --target {{x64}}
 
 # Build 32-bit release binaries (CLI + GUI)
 # First-time setup: rustup target add i686-pc-windows-msvc
 build-x86:
-    cargo build --release --package mqb-flash-cli --package mqb-flash-gui --target {{x86}}
+    cargo build --release --package mqb-flash-cli --package mqb-flash-gui --features mqb-flash-cli/j2534,mqb-flash-gui/j2534 --target {{x86}}
 
 # Build CLI + GUI for both architectures
 build: build-x64 build-x86
