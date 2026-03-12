@@ -7,10 +7,11 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use mqb_checksum::{locate_ecm3_with_asw1, validate_ecm3, validate_simos};
+use mqb_checksum::{locate_ecm3_with_asw1, validate_ecm3, validate_haldex, validate_simos};
+use mqb_modules::modules::haldex4motion::HALDEX_FLASH_INFO;
 use mqb_modules::modules::simos18::S18_FLASH_INFO;
 use mqb_modules::modules::simos1810::S1810_FLASH_INFO;
-use mqb_modules::{BlockData, ChecksumState, FlashInfo};
+use mqb_modules::{BlockData, ChecksumKind, ChecksumState, FlashInfo};
 
 // CARGO_MANIFEST_DIR = .../vw-flash-rs/crates/mqb-binfile  →  ../../../ = VW_Flash_Rewrite/
 const FRF_S1810: &str =
@@ -31,6 +32,11 @@ const FRF_S18_K3: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../frf/FL_8V0906259K__0003.frf");
 const FRF_S18_06K: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../frf/FL_06K906071B__9066.frf");
+
+const FRF_HALDEX_C: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../frf/FL_0CQ907554C__7755.frf");
+const FRF_HALDEX_E: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../frf/FL_0CQ907554E__8040.frf");
 
 // Keep the old alias so the cboot-patch tests below still compile.
 const FRF_S18: &str = FRF_S18_H1;
@@ -87,6 +93,20 @@ fn assert_all_valid(frf_path: &str, flash_info: &'static FlashInfo) {
     assert_eq!(state, ChecksumState::Valid, "{frf_path}: ECM3 checksum is invalid");
 }
 
+/// Extract all blocks from a Haldex FRF and check every block checksum.
+fn assert_haldex_valid(frf_path: &str, flash_info: &'static FlashInfo) {
+    assert_eq!(flash_info.checksum_kind, ChecksumKind::Haldex);
+    let bin = extract_frf_to_bin(frf_path, flash_info);
+    let by_name = mqb_binfile::blocks_from_bytes(&bin, flash_info);
+    assert!(!by_name.is_empty(), "{frf_path}: no blocks extracted");
+
+    for (name, block) in &by_name {
+        let (state, _) = validate_haldex(&block.block_bytes, block.block_number, flash_info, false);
+        assert_eq!(state, ChecksumState::Valid,
+            "{frf_path}: block '{name}' has invalid Haldex checksum");
+    }
+}
+
 fn apply_cboot_patch_and_fix(bin: &mut [u8], flash_info: &'static FlashInfo) {
     let block_num = flash_info.block_to_number("CBOOT").expect("module has a CBOOT block");
     let offset = flash_info.binfile_offset(block_num).expect("CBOOT has a binfile offset");
@@ -124,6 +144,10 @@ fn all_frf_files_checksums_valid() {
     for &(path, info) in cases {
         assert_all_valid(path, info);
     }
+
+    // Haldex FRFs (different checksum algorithm)
+    assert_haldex_valid(FRF_HALDEX_C, &HALDEX_FLASH_INFO);
+    assert_haldex_valid(FRF_HALDEX_E, &HALDEX_FLASH_INFO);
 }
 
 // ── CBOOT patch: verify checksums survive patch + fix ─────────────────────────

@@ -74,4 +74,5 @@ pub static S1810_FLASH_INFO: FlashInfo = FlashInfo {
     }),
     checksum_kind: ChecksumKind::Simos,
     lzss10_odx: false,
+    dynamic_block_length_offsets: &[],
 };

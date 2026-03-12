@@ -74,4 +74,5 @@ pub static DQ381_FLASH_INFO: FlashInfo = FlashInfo {
     patch_info: None,
     checksum_kind: ChecksumKind::Dq381,
     lzss10_odx: false,
+    dynamic_block_length_offsets: &[],
 };

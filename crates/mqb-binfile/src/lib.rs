@@ -25,7 +25,7 @@ pub fn blocks_from_bytes(data: &[u8], flash_info: &FlashInfo) -> HashMap<String,
 
     for &(block_num, frf_name) in flash_info.block_names_frf {
         let Some(offset) = flash_info.binfile_offset(block_num) else { continue };
-        let Some(length) = flash_info.block_length(block_num) else { continue };
+        let Some(length) = flash_info.resolve_block_length(block_num, data) else { continue };
 
         if offset + length > data.len() {
             continue;
@@ -51,9 +51,8 @@ pub fn bin_from_blocks(blocks: &HashMap<String, BlockData>, flash_info: &FlashIn
     for block in blocks.values() {
         let block_num = block.block_number;
         let Some(offset) = flash_info.binfile_offset(block_num) else { continue };
-        let Some(length) = flash_info.block_length(block_num) else { continue };
 
-        let copy_len = length.min(block.block_bytes.len());
+        let copy_len = block.block_bytes.len().min(output.len().saturating_sub(offset));
         output[offset..offset + copy_len].copy_from_slice(&block.block_bytes[..copy_len]);
     }
 

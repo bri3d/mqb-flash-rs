@@ -76,4 +76,5 @@ pub static DQ250_FLASH_INFO: FlashInfo = FlashInfo {
     patch_info: None,
     checksum_kind: ChecksumKind::Dsg,
     lzss10_odx: true,
+    dynamic_block_length_offsets: &[],
 };

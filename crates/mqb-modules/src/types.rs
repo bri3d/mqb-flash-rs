@@ -125,6 +125,10 @@ pub struct FlashInfo {
     /// Whether the ODX for this ECU uses LZSS10 for all blocks regardless of
     /// the ENCRYPT-COMPRESS-METHOD field (required for DSG/DQ250).
     pub lzss10_odx: bool,
+    /// `(block_number, header_offset)` — for modules with dynamic block lengths (Haldex),
+    /// the offset within each block's data region where the actual length is stored as u32 LE.
+    /// Empty for all other modules (static lengths only).
+    pub dynamic_block_length_offsets: &'static [(u8, usize)],
 }
 
 impl FlashInfo {
@@ -133,9 +137,27 @@ impl FlashInfo {
         lookup(self.base_addresses, block_num)
     }
 
-    /// Look up a block length by block number.
+    /// Look up a block length by block number (static).
     pub fn block_length(&self, block_num: u8) -> Option<usize> {
         lookup(self.block_lengths, block_num)
+    }
+
+    /// Resolve the actual block length, reading it from the binary data if this
+    /// module has dynamic block lengths (Haldex). Falls back to the static length.
+    pub fn resolve_block_length(&self, block_num: u8, full_bin: &[u8]) -> Option<usize> {
+        if let Some(header_offset) = lookup(self.dynamic_block_length_offsets, block_num) {
+            let binfile_offset = self.binfile_offset(block_num)?;
+            let addr = binfile_offset + header_offset;
+            if addr + 4 <= full_bin.len() {
+                let len = u32::from_le_bytes(
+                    full_bin[addr..addr + 4].try_into().unwrap(),
+                ) as usize;
+                if len > 0 && binfile_offset + len <= full_bin.len() {
+                    return Some(len);
+                }
+            }
+        }
+        self.block_length(block_num)
     }
 
     /// Look up the FRF filename for a block number.

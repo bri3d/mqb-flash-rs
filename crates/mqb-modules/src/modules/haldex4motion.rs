@@ -81,4 +81,9 @@ pub static HALDEX_FLASH_INFO: FlashInfo = FlashInfo {
     patch_info: None,
     checksum_kind: ChecksumKind::Haldex,
     lzss10_odx: false,
+    dynamic_block_length_offsets: &[
+        (2, 0x14),  // CAL: length at offset 0x14
+        (3, 0x204), // ASW: length at offset 0x204
+        (4, 0x04),  // VERSION: length at offset 0x04
+    ],
 };
