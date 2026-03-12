@@ -49,6 +49,8 @@ struct State {
     socketcan_name: String,
     /// J2534 PassThru DLL path (empty = auto-discover from registry).
     j2534_dll_path: String,
+    /// STmin TX override in microseconds (empty = default 500 µs).
+    stmin_tx_input: String,
     /// Path to the selected firmware file (.frf, .odx, or .bin).
     firmware_path: Option<PathBuf>,
     /// ECU data records populated by Connect.
@@ -78,6 +80,7 @@ impl Default for State {
             interface_kind: InterfaceKind::Panda,
             socketcan_name: String::new(),
             j2534_dll_path: String::new(),
+            stmin_tx_input: "500".into(),
             firmware_path: None,
             ecu_info: BTreeMap::new(),
             flash_op: None,
@@ -97,6 +100,12 @@ impl State {
         let line = msg.into();
         tracing::info!("{}", line);
         self.log_lines.push(line);
+    }
+
+    /// Parse the STmin TX input field to `u32` (microseconds).
+    /// Falls back to 500 if empty or invalid.
+    fn parsed_stmin_tx(&self) -> u32 {
+        self.stmin_tx_input.trim().parse::<u32>().unwrap_or(500)
     }
 
     fn build_interface(&self) -> Option<Interface> {
@@ -192,6 +201,7 @@ enum Message {
     InterfaceKindChanged(InterfaceKind),
     SocketCanNameChanged(String),
     J2534DllPathChanged(String),
+    StminTxChanged(String),
     BrowseFirmwarePressed,
     FirmwareSelected(Option<PathBuf>),
     ConnectPressed,
@@ -225,6 +235,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
         Message::J2534DllPathChanged(s) => {
             state.j2534_dll_path = s;
+            Task::none()
+        }
+
+        Message::StminTxChanged(s) => {
+            state.stmin_tx_input = s;
             Task::none()
         }
 
@@ -360,7 +375,7 @@ fn start_flash_op(state: &mut State, kind: FlashKind) {
         opts: FlashOptions {
             interface,
             patch_cboot: false, // handled by us before flash
-            stmin_override: None,
+            stmin_override: Some(state.parsed_stmin_tx()),
             workshop_code: [0x20, 0x04, 0x20, 0x42, 0x04, 0x20, 0x42, 0xB1, 0x3D],
             progress_tx: None, // subscription fills this in
         },
@@ -816,6 +831,7 @@ fn view(state: &State) -> Element<'_, Message> {
     .align_y(Alignment::Center);
 
     let iface_row = row![
+        text("Interface:").width(80),
         radio("Panda", InterfaceKind::Panda, Some(state.interface_kind), Message::InterfaceKindChanged),
         radio(
             "J2534",
@@ -829,21 +845,46 @@ fn view(state: &State) -> Element<'_, Message> {
             Some(state.interface_kind),
             Message::InterfaceKindChanged,
         ),
-        text_input("DLL path (blank = auto)", &state.j2534_dll_path)
-            .on_input(Message::J2534DllPathChanged)
-            .width(200),
         radio(
             "SocketCAN",
             InterfaceKind::SocketCan,
             Some(state.interface_kind),
             Message::InterfaceKindChanged,
         ),
-        text_input("can0", &state.socketcan_name)
-            .on_input(Message::SocketCanNameChanged)
-            .width(100),
     ]
     .spacing(12)
     .align_y(Alignment::Center);
+
+    // Adapter-specific settings + STmin
+    let mut settings_row = row![].spacing(12).align_y(Alignment::Center);
+    match state.interface_kind {
+        InterfaceKind::J2534 | InterfaceKind::J2534IsoTp => {
+            settings_row = settings_row
+                .push(text("DLL path:"))
+                .push(
+                    text_input("(auto-detect)", &state.j2534_dll_path)
+                        .on_input(Message::J2534DllPathChanged)
+                        .width(220),
+                );
+        }
+        InterfaceKind::SocketCan => {
+            settings_row = settings_row
+                .push(text("Interface:"))
+                .push(
+                    text_input("can0", &state.socketcan_name)
+                        .on_input(Message::SocketCanNameChanged)
+                        .width(120),
+                );
+        }
+        InterfaceKind::Panda => {}
+    }
+    settings_row = settings_row
+        .push(text("STmin TX (\u{00B5}s):"))
+        .push(
+            text_input("500", &state.stmin_tx_input)
+                .on_input(Message::StminTxChanged)
+                .width(110),
+        );
 
     let connect_btn = button(text("Connect & Identify ECU").size(14))
         .on_press_maybe(state.can_connect().then_some(Message::ConnectPressed))
@@ -851,7 +892,7 @@ fn view(state: &State) -> Element<'_, Message> {
 
     let config_section = section(
         "Configuration",
-        column![module_picker, iface_row, connect_btn].spacing(10),
+        column![module_picker, iface_row, settings_row, connect_btn].spacing(10),
     );
 
     // ── ECU Info ───────────────────────────────────────────────────────────
