@@ -2,7 +2,10 @@
 //! and helper utilities used by both the raw CAN adapter and the native
 //! ISO 15765 transport.
 
+use super::constants::{FilterType, IoctlId, IoctlParam, Protocol, Status, CAN_29BIT_ID_FLAG};
+use super::error::Error as J2534Error;
 use crate::can::Identifier;
+use crate::Result;
 
 /// `PASSTHRU_MSG` from the SAE J2534 04.04 specification.
 ///
@@ -28,70 +31,6 @@ impl Default for PassThruMsg {
     }
 }
 
-/// Bit 31 flag in the 4-byte CAN ID field of a `PassThruMsg`, indicating a
-/// 29-bit extended CAN identifier.
-pub const CAN_29BIT_ID: u32 = 0x8000_0000;
-
-impl PassThruMsg {
-    /// Build a message carrying `payload` after a 4-byte big-endian CAN ID.
-    /// Used for both `PROTOCOL_CAN` and `PROTOCOL_ISO15765` frames.
-    ///
-    /// For [`Identifier::Extended`], bit 31 (`CAN_29BIT_ID`) is set in the
-    /// ID field as required by the J2534 specification.
-    pub fn new(protocol_id: u32, id: Identifier, payload: &[u8]) -> Self {
-        let raw_id: u32 = match id {
-            Identifier::Extended(v) => v | CAN_29BIT_ID,
-            Identifier::Standard(v) => v,
-        };
-        let id_bytes = raw_id.to_be_bytes();
-        let mut data = [0u8; 4128];
-        data[..4].copy_from_slice(&id_bytes);
-        data[4..4 + payload.len()].copy_from_slice(payload);
-        let data_size = (4 + payload.len()) as u32;
-        Self {
-            protocol_id,
-            data,
-            data_size,
-            extra_data_index: data_size,
-            ..Default::default()
-        }
-    }
-
-    /// Build a message from a raw `u32` CAN ID (no extended-ID flag logic).
-    ///
-    /// Useful for filter masks (e.g. `0xFFFF_FFFF`) where the value is not a
-    /// real CAN arbitration ID.
-    pub fn new_raw(protocol_id: u32, raw_can_id: u32, payload: &[u8]) -> Self {
-        let id_bytes = raw_can_id.to_be_bytes();
-        let mut data = [0u8; 4128];
-        data[..4].copy_from_slice(&id_bytes);
-        data[4..4 + payload.len()].copy_from_slice(payload);
-        let data_size = (4 + payload.len()) as u32;
-        Self {
-            protocol_id,
-            data,
-            data_size,
-            extra_data_index: data_size,
-            ..Default::default()
-        }
-    }
-}
-
-/// Parse a 4-byte big-endian CAN ID from a `PassThruMsg` data field.
-///
-/// If bit 31 (`CAN_29BIT_ID`) is set, returns [`Identifier::Extended`] with
-/// the lower 29 bits.  Otherwise returns [`Identifier::Standard`].
-pub fn parse_can_id(data: &[u8]) -> Identifier {
-    let raw = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-    if raw & CAN_29BIT_ID != 0 {
-        Identifier::Extended(raw & !CAN_29BIT_ID)
-    } else {
-        Identifier::Standard(raw)
-    }
-}
-
-// SCONFIG / SCONFIG_LIST
-
 /// Single parameter entry passed to `PassThruIoctl(SET_CONFIG, …)`.
 #[repr(C)]
 pub struct SConfig {
@@ -106,61 +45,170 @@ pub struct SConfigList {
     pub config_ptr: *mut SConfig,
 }
 
-pub const STATUS_NOERROR: i32 = 0x00;
-pub const ERR_BUFFER_EMPTY: i32 = 0x10;
-pub const ERR_TIMEOUT: i32 = 0x09;
-
-/// `PassThruIoctl` IOCTL ID for writing channel configuration.
-pub const IOCTL_SET_CONFIG: u32 = 0x02;
-
-/// Call `PassThruIoctl(SET_CONFIG)` with a single `(parameter, value)` pair.
-///
-/// Returns the raw J2534 status code.
-pub fn set_config(
-    ioctl_fn: FnPassThruIoctl,
-    channel_id: u32,
-    parameter: u32,
-    value: u32,
-) -> i32 {
-    let mut cfg = SConfig { parameter, value };
-    let mut list = SConfigList { num_of_params: 1, config_ptr: &mut cfg };
-    unsafe {
-        ioctl_fn(
-            channel_id,
-            IOCTL_SET_CONFIG,
-            &mut list as *mut SConfigList as *mut _,
-            std::ptr::null_mut(),
-        )
-    }
-}
-
-// Function-pointer signatures
-
-pub type FnPassThruOpen =
-    unsafe extern "system" fn(*const u8, *mut u32) -> i32;
-pub type FnPassThruClose =
-    unsafe extern "system" fn(u32) -> i32;
-pub type FnPassThruConnect =
-    unsafe extern "system" fn(u32, u32, u32, u32, *mut u32) -> i32;
-pub type FnPassThruDisconnect =
-    unsafe extern "system" fn(u32) -> i32;
+pub type FnPassThruOpen = unsafe extern "system" fn(*const u8, *mut u32) -> i32;
+pub type FnPassThruClose = unsafe extern "system" fn(u32) -> i32;
+pub type FnPassThruConnect = unsafe extern "system" fn(u32, u32, u32, u32, *mut u32) -> i32;
+pub type FnPassThruDisconnect = unsafe extern "system" fn(u32) -> i32;
 pub type FnPassThruReadMsgs =
     unsafe extern "system" fn(u32, *mut PassThruMsg, *mut u32, u32) -> i32;
 pub type FnPassThruWriteMsgs =
     unsafe extern "system" fn(u32, *mut PassThruMsg, *mut u32, u32) -> i32;
-pub type FnPassThruStartMsgFilter =
-    unsafe extern "system" fn(
-        u32,
-        u32,
-        *const PassThruMsg,
-        *const PassThruMsg,
-        *const PassThruMsg,
-        *mut u32,
-    ) -> i32;
+pub type FnPassThruStartMsgFilter = unsafe extern "system" fn(
+    u32,
+    u32,
+    *const PassThruMsg,
+    *const PassThruMsg,
+    *const PassThruMsg,
+    *mut u32,
+) -> i32;
 pub type FnPassThruIoctl =
     unsafe extern "system" fn(u32, u32, *mut std::ffi::c_void, *mut std::ffi::c_void) -> i32;
 
-// J2534 device handle
+/// Connected J2534 channel plus the callback set needed to operate it.
+///
+/// The callbacks are copied out of [`J2534Device`] so adapter implementations
+/// can keep using them after channel setup without repeatedly unpacking the
+/// device handle.
+#[derive(Clone, Copy)]
+pub(crate) struct J2534Channel {
+    pub(crate) channel_id: u32,
+    pub(crate) disconnect: FnPassThruDisconnect,
+    pub(crate) read: FnPassThruReadMsgs,
+    pub(crate) write: FnPassThruWriteMsgs,
+    pub(crate) filter: FnPassThruStartMsgFilter,
+    pub(crate) ioctl: FnPassThruIoctl,
+}
+
+impl J2534Channel {
+    pub(crate) fn disconnect(&self) -> Status {
+        Status::from(unsafe { (self.disconnect)(self.channel_id) })
+    }
+
+    pub(crate) fn clear_rx_buffer(&self) -> Status {
+        Status::from(unsafe {
+            (self.ioctl)(
+                self.channel_id,
+                IoctlId::ClearRxBuffer.into(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        })
+    }
+
+    pub(crate) fn read_message(&self, msg: &mut PassThruMsg, timeout_ms: u32) -> (Status, u32) {
+        let mut count: u32 = 1;
+        let status =
+            Status::from(unsafe { (self.read)(self.channel_id, msg, &mut count, timeout_ms) });
+        (status, count)
+    }
+
+    pub(crate) fn write_message(&self, msg: &mut PassThruMsg, timeout_ms: u32) -> (Status, u32) {
+        let mut count: u32 = 1;
+        let status =
+            Status::from(unsafe { (self.write)(self.channel_id, msg, &mut count, timeout_ms) });
+        (status, count)
+    }
+
+    /// Call `PassThruIoctl(SET_CONFIG)` with a single `(parameter, value)` pair.
+    pub(crate) fn set_config(&self, parameter: IoctlParam, value: u32) -> Status {
+        let mut cfg = SConfig {
+            parameter: parameter.into(),
+            value,
+        };
+        let mut list = SConfigList {
+            num_of_params: 1,
+            config_ptr: &mut cfg,
+        };
+        let ret = unsafe {
+            (self.ioctl)(
+                self.channel_id,
+                IoctlId::SetConfig.into(),
+                &mut list as *mut SConfigList as *mut _,
+                std::ptr::null_mut(),
+            )
+        };
+        Status::from(ret)
+    }
+
+    /// Install a pass-all receive filter on a CAN channel.
+    pub(crate) fn install_pass_all_can_filter(&self) -> Status {
+        for msg in pass_all_can_filter_messages() {
+            let (status, filter_id) = self.start_msg_filter(FilterType::Pass, &msg, &msg, None);
+            tracing::debug!(
+                ret = %status,
+                filter_id,
+                tx_flags = format_args!("0x{:04X}", msg.tx_flags),
+                "PassThruStartMsgFilter"
+            );
+            if status != Status::NoError {
+                return status;
+            }
+        }
+
+        Status::NoError
+    }
+
+    /// Install the ISO 15765 flow-control filter used by the native ISO-TP channel.
+    pub(crate) fn install_iso15765_flow_control_filter(
+        &self,
+        tx_id: Identifier,
+        rx_id: Identifier,
+        ext_address: Option<u8>,
+        tx_flags: u32,
+    ) -> Status {
+        let proto: u32 = Protocol::Iso15765.into();
+        let mut mask_msg = PassThruMsg::new_raw(proto, 0xFFFF_FFFF, &[]);
+        if ext_address.is_some() {
+            mask_msg.data[4] = 0xFF;
+            mask_msg.data_size = 5;
+            mask_msg.extra_data_index = 5;
+        }
+        let mut pattern_msg = PassThruMsg::new_with_ext_address(proto, rx_id, ext_address, &[]);
+        let mut fc_msg = PassThruMsg::new_with_ext_address(proto, tx_id, ext_address, &[]);
+        mask_msg.tx_flags = tx_flags;
+        pattern_msg.tx_flags = tx_flags;
+        fc_msg.tx_flags = tx_flags;
+
+        let (status, filter_id) = self.start_msg_filter(
+            FilterType::FlowControl,
+            &mask_msg,
+            &pattern_msg,
+            Some(&fc_msg),
+        );
+        let tx_raw: u32 = tx_id.into();
+        let rx_raw: u32 = rx_id.into();
+        tracing::debug!(
+            ret = %status,
+            filter_id,
+            tx_id = format_args!("{tx_raw:08X}"),
+            rx_id = format_args!("{rx_raw:08X}"),
+            ext_address,
+            "PassThruStartMsgFilter (FLOW_CONTROL)"
+        );
+        status
+    }
+
+    fn start_msg_filter(
+        &self,
+        filter_type: FilterType,
+        mask_msg: &PassThruMsg,
+        pattern_msg: &PassThruMsg,
+        flow_control_msg: Option<&PassThruMsg>,
+    ) -> (Status, u32) {
+        let mut filter_id: u32 = 0;
+        let status = Status::from(unsafe {
+            (self.filter)(
+                self.channel_id,
+                filter_type.into(),
+                mask_msg,
+                pattern_msg,
+                flow_control_msg.map_or(std::ptr::null(), |msg| msg),
+                &mut filter_id,
+            )
+        });
+        (status, filter_id)
+    }
+}
 
 /// Owns a J2534 device (the `PassThruOpen` handle) and all resolved DLL
 /// function pointers.  On [`Drop`], calls `PassThruClose` to release the
@@ -183,8 +231,136 @@ pub struct J2534Device {
 
 impl Drop for J2534Device {
     fn drop(&mut self) {
-        let ret = unsafe { (self.close)(self.device_id) };
-        tracing::trace!(ret = status_str(ret), "PassThruClose");
+        let status = Status::from(unsafe { (self.close)(self.device_id) });
+        tracing::trace!(ret = %status, "PassThruClose");
+    }
+}
+
+/// Call `PassThruConnect` for `protocol` with the provided `flags`.
+pub(crate) fn connect_channel_with_flags(
+    device: &J2534Device,
+    protocol: Protocol,
+    flags: u32,
+    bitrate: u32,
+) -> Result<J2534Channel> {
+    let mut channel_id: u32 = 0;
+    let status = Status::from(unsafe {
+        (device.connect)(
+            device.device_id,
+            protocol.into(),
+            flags,
+            bitrate,
+            &mut channel_id,
+        )
+    });
+    tracing::debug!(
+        ret = %status,
+        protocol = protocol_name(protocol),
+        flags = format_args!("0x{flags:08X}"),
+        channel_id,
+        bitrate,
+        "PassThruConnect"
+    );
+    if status != Status::NoError {
+        return Err(J2534Error::DllError(format!(
+            "PassThruConnect ({}, {bitrate} bps) failed: {status}",
+            protocol_name(protocol)
+        ))
+        .into());
+    }
+
+    Ok(J2534Channel {
+        channel_id,
+        disconnect: device.disconnect,
+        read: device.read,
+        write: device.write,
+        filter: device.filter,
+        ioctl: device.ioctl,
+    })
+}
+
+/// J2534 `TxFlags`/`RxStatus` bits derived from a CAN identifier.
+pub fn can_id_flags(id: Identifier) -> u32 {
+    if id.is_extended() {
+        CAN_29BIT_ID_FLAG
+    } else {
+        0
+    }
+}
+
+fn pass_all_can_filter_messages() -> [PassThruMsg; 2] {
+    let standard = PassThruMsg::new_raw(Protocol::Can.into(), 0, &[]);
+    let mut extended = standard;
+    extended.tx_flags = CAN_29BIT_ID_FLAG;
+    [standard, extended]
+}
+
+impl PassThruMsg {
+    /// Build a message carrying `payload` after a 4-byte big-endian CAN ID.
+    /// Used for both `PROTOCOL_CAN` and `PROTOCOL_ISO15765` frames.
+    pub fn new(protocol_id: u32, id: Identifier, payload: &[u8]) -> Self {
+        Self::new_with_ext_address(protocol_id, id, None, payload)
+    }
+
+    /// Build a message carrying an optional ISO 15765 extended address
+    /// between the CAN ID and payload.
+    pub fn new_with_ext_address(
+        protocol_id: u32,
+        id: Identifier,
+        ext_address: Option<u8>,
+        payload: &[u8],
+    ) -> Self {
+        let raw_id: u32 = id.into();
+        Self::new_raw_with_ext_address(protocol_id, raw_id, ext_address, payload)
+    }
+
+    /// Build a message from a raw `u32` CAN ID (no extended-ID flag logic).
+    ///
+    /// Useful for filter masks (e.g. `0xFFFF_FFFF`) where the value is not a
+    /// real CAN arbitration ID.
+    pub fn new_raw(protocol_id: u32, raw_can_id: u32, payload: &[u8]) -> Self {
+        Self::new_raw_with_ext_address(protocol_id, raw_can_id, None, payload)
+    }
+
+    /// Build a message from a raw `u32` CAN ID with an optional ISO 15765
+    /// extended address byte before `payload`.
+    pub fn new_raw_with_ext_address(
+        protocol_id: u32,
+        raw_can_id: u32,
+        ext_address: Option<u8>,
+        payload: &[u8],
+    ) -> Self {
+        let id_bytes = raw_can_id.to_be_bytes();
+        let mut data = [0u8; 4128];
+        data[..4].copy_from_slice(&id_bytes);
+        let mut offset = 4;
+        if let Some(ext_address) = ext_address {
+            data[offset] = ext_address;
+            offset += 1;
+        }
+        data[offset..offset + payload.len()].copy_from_slice(payload);
+        let data_size = (offset + payload.len()) as u32;
+        Self {
+            protocol_id,
+            data,
+            data_size,
+            extra_data_index: data_size,
+            ..Default::default()
+        }
+    }
+}
+
+/// Parse a CAN identifier from a J2534 message.
+pub fn parse_can_id(msg: &PassThruMsg) -> Identifier {
+    let raw = u32::from_be_bytes([msg.data[0], msg.data[1], msg.data[2], msg.data[3]]);
+    if msg.rx_status & CAN_29BIT_ID_FLAG != 0 {
+        Identifier::Extended(raw)
+    } else {
+        assert!(
+            raw <= 0x7FF,
+            "J2534 message missing 29-bit flag for non-standard CAN ID 0x{raw:08X}"
+        );
+        Identifier::Standard(raw)
     }
 }
 
@@ -192,12 +368,12 @@ impl Drop for J2534Device {
 ///
 /// Pass `None` for `dll_path` to auto-discover the first 64-bit PassThru
 /// driver from the Windows registry.
-pub fn open_device(dll_path: Option<&str>) -> Result<J2534Device, String> {
-    let path = resolve_dll_path(dll_path)?;
+pub fn open_device(dll_path: Option<&str>) -> Result<J2534Device> {
+    let path = super::dll::resolve_dll_path(dll_path)?;
 
     let lib = match unsafe { libloading::Library::new(&path) } {
         Ok(l) => l,
-        Err(e) => return Err(format!("Cannot load {path}: {e}")),
+        Err(e) => return Err(J2534Error::DllError(format!("Cannot load {path}: {e}")).into()),
     };
 
     macro_rules! sym {
@@ -205,32 +381,30 @@ pub fn open_device(dll_path: Option<&str>) -> Result<J2534Device, String> {
             match unsafe { lib.get::<$ty>($name) } {
                 Ok(s) => *s,
                 Err(e) => {
-                    return Err(format!(
+                    return Err(J2534Error::DllError(format!(
                         "Symbol {} not found in {path}: {e}",
                         std::str::from_utf8($name).unwrap_or("?")
-                    ));
+                    ))
+                    .into());
                 }
             }
         };
     }
 
-    let pass_thru_open   = sym!(b"PassThruOpen\0",           FnPassThruOpen);
-    let close            = sym!(b"PassThruClose\0",          FnPassThruClose);
-    let connect          = sym!(b"PassThruConnect\0",        FnPassThruConnect);
-    let disconnect       = sym!(b"PassThruDisconnect\0",     FnPassThruDisconnect);
-    let read             = sym!(b"PassThruReadMsgs\0",       FnPassThruReadMsgs);
-    let write            = sym!(b"PassThruWriteMsgs\0",      FnPassThruWriteMsgs);
-    let filter           = sym!(b"PassThruStartMsgFilter\0", FnPassThruStartMsgFilter);
-    let ioctl            = sym!(b"PassThruIoctl\0",          FnPassThruIoctl);
+    let pass_thru_open = sym!(b"PassThruOpen\0", FnPassThruOpen);
+    let close = sym!(b"PassThruClose\0", FnPassThruClose);
+    let connect = sym!(b"PassThruConnect\0", FnPassThruConnect);
+    let disconnect = sym!(b"PassThruDisconnect\0", FnPassThruDisconnect);
+    let read = sym!(b"PassThruReadMsgs\0", FnPassThruReadMsgs);
+    let write = sym!(b"PassThruWriteMsgs\0", FnPassThruWriteMsgs);
+    let filter = sym!(b"PassThruStartMsgFilter\0", FnPassThruStartMsgFilter);
+    let ioctl = sym!(b"PassThruIoctl\0", FnPassThruIoctl);
 
     let mut device_id: u32 = 0;
-    let ret = unsafe { pass_thru_open(std::ptr::null(), &mut device_id) };
-    tracing::debug!(ret = status_str(ret), device_id, "PassThruOpen");
-    if ret != STATUS_NOERROR {
-        return Err(format!(
-            "PassThruOpen failed: 0x{ret:02X} ({})",
-            status_str(ret)
-        ));
+    let status = Status::from(unsafe { pass_thru_open(std::ptr::null(), &mut device_id) });
+    tracing::debug!(ret = %status, device_id, "PassThruOpen");
+    if status != Status::NoError {
+        return Err(J2534Error::DllError(format!("PassThruOpen failed: {status}")).into());
     }
 
     Ok(J2534Device {
@@ -246,198 +420,9 @@ pub fn open_device(dll_path: Option<&str>) -> Result<J2534Device, String> {
     })
 }
 
-// DLL path resolution
-
-/// Resolve the PassThru DLL path.
-///
-/// If `dll_path` is `Some`, uses it directly (after architecture check).
-/// If `None`, discovers the first 64-bit driver from the Windows registry.
-pub fn resolve_dll_path(dll_path: Option<&str>) -> Result<String, String> {
-    let path = if let Some(p) = dll_path {
-        p.to_owned()
-    } else {
-        let (native, wow32) = enumerate_passthru_drivers()
-            .map_err(|e| format!("Cannot enumerate J2534 drivers: {e}"))?;
-
-        if let Some(p) = native.into_iter().next() {
-            p
-        } else if wow32.is_empty() {
-            return Err(
-                "No J2534 PassThru drivers found in \
-                 HKLM\\SOFTWARE\\PassThruSupport.04.04"
-                    .to_owned(),
-            );
-        } else {
-            return Err(format!(
-                "No 64-bit J2534 drivers found. \
-                 The following device(s) have 32-bit-only drivers registered \
-                 under HKLM\\SOFTWARE\\WOW6432Node\\PassThruSupport.04.04, \
-                 which cannot be loaded by this 64-bit process:\n  {}\n\
-                 Options:\n  \
-                   1. Install 64-bit drivers for your device (check manufacturer's website).\n  \
-                   2. Use `j2534:<path>` to specify a 64-bit DLL explicitly.\n  \
-                   3. Use a 32-bit build instead.",
-                wow32.join("\n  ")
-            ));
-        }
-    };
-
-    check_dll_architecture(&path)?;
-    Ok(path)
-}
-
-/// Returns `(native_64bit_paths, wow32_paths)`.
-fn enumerate_passthru_drivers() -> Result<(Vec<String>, Vec<String>), String> {
-    use winreg::enums::HKEY_LOCAL_MACHINE;
-    use winreg::RegKey;
-
-    const PASSTHRU_KEY: &str = "SOFTWARE\\PassThruSupport.04.04";
-    const PASSTHRU_KEY_WOW: &str = "SOFTWARE\\WOW6432Node\\PassThruSupport.04.04";
-
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-
-    let native = read_passthru_paths(&hklm, PASSTHRU_KEY).unwrap_or_default();
-    let wow32 = read_passthru_paths(&hklm, PASSTHRU_KEY_WOW)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|p| !native.contains(p))
-        .collect();
-
-    Ok((native, wow32))
-}
-
-fn read_passthru_paths(hklm: &winreg::RegKey, key: &str) -> Result<Vec<String>, String> {
-    use winreg::enums::KEY_READ;
-
-    let root = hklm
-        .open_subkey_with_flags(key, KEY_READ)
-        .map_err(|e| e.to_string())?;
-
-    let paths = root
-        .enum_keys()
-        .flatten()
-        .filter_map(|name| {
-            root.open_subkey_with_flags(&name, KEY_READ)
-                .ok()
-                .and_then(|sub| sub.get_value::<String, _>("FunctionLibrary").ok())
-        })
-        .collect();
-    Ok(paths)
-}
-
-// PE header architecture check
-
-#[derive(Debug, PartialEq, Eq)]
-enum DllMachine {
-    X86,
-    X64,
-    Arm64,
-    Other(u16),
-}
-
-fn dll_machine(path: &str) -> std::io::Result<DllMachine> {
-    use std::io::{Read, Seek, SeekFrom};
-
-    let mut f = std::fs::File::open(path)?;
-
-    let mut magic = [0u8; 2];
-    f.read_exact(&mut magic)?;
-    if magic != [b'M', b'Z'] {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "not a PE file (no MZ header)",
-        ));
-    }
-
-    f.seek(SeekFrom::Start(0x3C))?;
-    let mut pe_offset_bytes = [0u8; 4];
-    f.read_exact(&mut pe_offset_bytes)?;
-    let pe_offset = u32::from_le_bytes(pe_offset_bytes) as u64;
-
-    f.seek(SeekFrom::Start(pe_offset))?;
-    let mut sig = [0u8; 4];
-    f.read_exact(&mut sig)?;
-    if sig != [b'P', b'E', 0, 0] {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "not a valid PE file (bad PE signature)",
-        ));
-    }
-
-    let mut machine_bytes = [0u8; 2];
-    f.read_exact(&mut machine_bytes)?;
-    let machine = u16::from_le_bytes(machine_bytes);
-
-    Ok(match machine {
-        0x014C => DllMachine::X86,
-        0x8664 => DllMachine::X64,
-        0xAA64 => DllMachine::Arm64,
-        other => DllMachine::Other(other),
-    })
-}
-
-fn check_dll_architecture(path: &str) -> Result<(), String> {
-    let machine = match dll_machine(path) {
-        Ok(m) => m,
-        Err(_) => return Ok(()),
-    };
-
-    #[cfg(target_arch = "x86_64")]
-    if machine == DllMachine::X86 {
-        return Err(format!(
-            "J2534 DLL '{path}' is 32-bit (IMAGE_FILE_MACHINE_I386) and cannot \
-             be loaded by this 64-bit process.\n\
-             Options:\n  \
-               1. Install 64-bit drivers for your device.\n  \
-               2. Use a 32-bit build instead."
-        ));
-    }
-
-    #[cfg(target_arch = "x86")]
-    if machine == DllMachine::X64 {
-        return Err(format!(
-            "J2534 DLL '{path}' is 64-bit (IMAGE_FILE_MACHINE_AMD64) and cannot \
-             be loaded by this 32-bit process.\n\
-             Options:\n  \
-               1. Install 32-bit drivers for your device.\n  \
-               2. Use a 64-bit build instead."
-        ));
-    }
-
-    Ok(())
-}
-
-// Errors from J2534 spec
-
-pub fn status_str(ret: i32) -> &'static str {
-    match ret {
-        0x00 => "STATUS_NOERROR",
-        0x01 => "ERR_NOT_SUPPORTED",
-        0x02 => "ERR_INVALID_CHANNEL_ID",
-        0x03 => "ERR_INVALID_PROTOCOL_ID",
-        0x04 => "ERR_NULL_PARAMETER",
-        0x05 => "ERR_INVALID_IOCTL_VALUE",
-        0x06 => "ERR_INVALID_FLAGS",
-        0x07 => "ERR_FAILED",
-        0x08 => "ERR_DEVICE_NOT_CONNECTED",
-        0x09 => "ERR_TIMEOUT",
-        0x0A => "ERR_INVALID_MSG",
-        0x0B => "ERR_INVALID_TIME_INTERVAL",
-        0x0C => "ERR_EXCEEDED_LIMIT",
-        0x0D => "ERR_INVALID_MSG_ID",
-        0x0E => "ERR_DEVICE_IN_USE",
-        0x0F => "ERR_INVALID_IOCTL_ID",
-        0x10 => "ERR_BUFFER_EMPTY",
-        0x11 => "ERR_BUFFER_FULL",
-        0x12 => "ERR_BUFFER_OVERFLOW",
-        0x13 => "ERR_PIN_INVALID",
-        0x14 => "ERR_CHANNEL_IN_USE",
-        0x15 => "ERR_MSG_PROTOCOL_ID",
-        0x16 => "ERR_INVALID_FILTER_ID",
-        0x17 => "ERR_NO_FLOW_CONTROL",
-        0x18 => "ERR_NOT_UNIQUE",
-        0x19 => "ERR_INVALID_BAUDRATE",
-        0x1A => "ERR_INVALID_DEVICE_ID",
-        _    => "ERR_UNKNOWN",
+fn protocol_name(protocol: Protocol) -> &'static str {
+    match protocol {
+        Protocol::Can => "CAN",
+        Protocol::Iso15765 => "ISO15765",
     }
 }
