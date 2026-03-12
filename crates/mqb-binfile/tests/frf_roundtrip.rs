@@ -68,6 +68,17 @@ fn assert_all_checksums_valid(bin: &[u8], flash_info: &'static FlashInfo) {
             ChecksumState::Valid,
             "block '{name}' should have a valid Simos checksum"
         );
+        // CBOOT has a secondary checksum (CBOOT_TEMP, block 6)
+        if flash_info.block_to_number("CBOOT") == Some(block.block_number)
+            && flash_info.checksum_block_location(6).is_some()
+        {
+            let (state2, _) = validate_simos(flash_info, &block.block_bytes, 6, false);
+            assert_eq!(
+                state2,
+                ChecksumState::Valid,
+                "block '{name}' should have a valid CBOOT_TEMP secondary checksum"
+            );
+        }
     }
 }
 
@@ -117,6 +128,7 @@ fn apply_cboot_patch_and_fix(bin: &mut [u8], flash_info: &'static FlashInfo) {
         .expect("CBOOT patch should find exactly 2 needle matches");
     bin[offset..end].copy_from_slice(&patched);
 
+    // Fix the primary CBOOT checksum
     let fixed_bytes = {
         let (state, fixed) =
             mqb_checksum::validate_simos(flash_info, &bin[offset..end], block_num, true);
@@ -124,6 +136,16 @@ fn apply_cboot_patch_and_fix(bin: &mut [u8], flash_info: &'static FlashInfo) {
         fixed.into_owned()
     };
     bin[offset..end].copy_from_slice(&fixed_bytes);
+
+    // Fix the secondary CBOOT_TEMP checksum (block 6, header at 0x340)
+    if flash_info.checksum_block_location(6).is_some() {
+        let fixed_bytes = {
+            let (_, fixed) =
+                mqb_checksum::validate_simos(flash_info, &bin[offset..end], 6, true);
+            fixed.into_owned()
+        };
+        bin[offset..end].copy_from_slice(&fixed_bytes);
+    }
 }
 
 // ── All FRF files: Simos block checksums + ECM3 ───────────────────────────────

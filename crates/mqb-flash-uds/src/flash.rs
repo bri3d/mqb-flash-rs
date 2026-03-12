@@ -317,7 +317,32 @@ async fn flash_via_j2534(
         )
         .map_err(|(e, _dev)| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
         let result = run_with_transport(&transport, flash_info, blocks, opts).await;
-        tokio::task::spawn_blocking(move || drop(transport));
+
+        // After the ECU reboots, clear emission DTCs again (best-effort).
+        // Recover the device handle, open a temporary OBD channel, clear, then close.
+        if result.is_ok() {
+            let dev = tokio::task::spawn_blocking(move || transport.into_device())
+                .await
+                .map_err(|e| FlashError::Interface(format!("Flash channel teardown failed: {e}")))?;
+            match automotive::j2534::J2534NativeIsoTpTransport::open_on_device(
+                dev, bitrate,
+                Identifier::Standard(0x700),
+                Identifier::Standard(0x7E8),
+                None,
+            ) {
+                Ok(obd) => {
+                    send_obd_dtc_clear(&obd).await;
+                    tokio::task::spawn_blocking(move || drop(obd));
+                }
+                Err((e, dev)) => {
+                    tracing::warn!("Post-reset OBD DTC clear channel open failed: {e} (continuing)");
+                    tokio::task::spawn_blocking(move || drop(dev));
+                }
+            }
+        } else {
+            tokio::task::spawn_blocking(move || drop(transport));
+        }
+
         result
     } else {
         let j = automotive::j2534::J2534CanAdapter::open(dll, bitrate)
@@ -392,7 +417,14 @@ async fn run_with_adapter(
     let stmin_us = opts.stmin_override.unwrap_or(500);
     config.separation_time_min = Some(std::time::Duration::from_micros(stmin_us as u64));
     let isotp = IsoTPAdapter::new(adapter, config);
-    run_with_transport(&isotp, flash_info, blocks, opts).await
+    let result = run_with_transport(&isotp, flash_info, blocks, opts).await;
+
+    // After the ECU reboots, clear emission DTCs again (best-effort).
+    if result.is_ok() {
+        send_obd_dtc_clear_via_adapter(adapter).await;
+    }
+
+    result
 }
 
 // ── Progress helper ───────────────────────────────────────────────────────────
@@ -561,7 +593,12 @@ async fn run_flash_sequence<T: IsoTpTransport>(
     // 13. TesterPresent
     uds.tester_present().await?;
 
-    // 14. ECU reset — the ECU hard-resets immediately and typically does not
+    // 14. Wait for the ECU to finish internal verification (e.g. patched periodic
+    //     tasks) before issuing the hard reset.
+    tracing::info!("Waiting 5 s for ECU internal verification…");
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+    // 15. ECU reset — the ECU hard-resets immediately and typically does not
     //     send a response before power-cycling, so a timeout is expected and OK.
     send_progress(opts, ProgressUpdate::EcuReset);
     tracing::info!("Resetting ECU");

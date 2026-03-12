@@ -2442,7 +2442,10 @@ name = "mqb-flash-uds"
 version = "0.1.0"
 dependencies = [
  "automotive",
+ "mqb-binfile",
  "mqb-bytes",
+ "mqb-cboot",
+ "mqb-checksum",
  "mqb-isotp",
  "mqb-lzss",
  "mqb-modules",
