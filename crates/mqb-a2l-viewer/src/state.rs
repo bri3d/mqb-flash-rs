@@ -54,6 +54,13 @@ pub struct State {
     /// (possible missing rescale).
     pub axis_changed_values_same: HashSet<usize>,
     pub computing_changes: bool,
+
+    // View options
+    pub show_percent: bool,
+
+    // Split pane
+    pub split_x: f32,
+    pub dragging_split: bool,
 }
 
 impl Default for State {
@@ -87,6 +94,9 @@ impl Default for State {
             changed_set: HashSet::new(),
             axis_changed_values_same: HashSet::new(),
             computing_changes: false,
+            show_percent: false,
+            split_x: 380.0,
+            dragging_split: false,
         }
     }
 }
@@ -182,4 +192,8 @@ pub enum Msg {
         /// Axis changed but data values identical — possible missing rescale.
         axis_changed_values_same: HashSet<usize>,
     },
+    TogglePercent,
+    SplitDragStart,
+    SplitDragUpdate(f32),
+    SplitDragEnd,
 }

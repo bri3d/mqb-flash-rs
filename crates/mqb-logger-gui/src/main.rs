@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use iced::event::{self, Event};
+use iced::mouse;
 use iced::widget::{
     button, checkbox, column, container, horizontal_rule, mouse_area, row, scrollable, text,
     text_input, vertical_rule,
@@ -67,7 +69,6 @@ enum EditTarget {
 
 const MAX_DISPLAY: usize = 500;
 
-#[derive(Default)]
 struct State {
     // A2L
     a2l_path: Option<PathBuf>,
@@ -90,8 +91,34 @@ struct State {
 
     /// Inline edit in progress: (target field, draft text)
     editing: Option<(EditTarget, String)>,
+
+    // Split pane
+    split_x: f32,
+    dragging_split: bool,
 }
 
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            a2l_path: None,
+            a2l: None,
+            loading_a2l: false,
+            a2l_error: None,
+            a2l_addr_index: HashMap::new(),
+            filter: String::new(),
+            filtered: Vec::new(),
+            total_matches: 0,
+            csv_path: None,
+            csv_items: Vec::new(),
+            loading_csv: false,
+            csv_error: None,
+            editing: None,
+            split_x: 760.0,
+            dragging_split: false,
+        }
+    }
+}
 
 impl State {
     fn rebuild_filter(&mut self) {
@@ -170,6 +197,11 @@ enum Message {
     // Keyboard navigation
     TabForward,
     TabBackward,
+
+    // Split pane
+    SplitDragStart,
+    SplitDragUpdate(f32),
+    SplitDragEnd,
 }
 
 // ─── Update ──────────────────────────────────────────────────────────────────
@@ -404,13 +436,28 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         // ── Keyboard nav ─────────────────────────────────────────────────
         Message::TabForward => iced::widget::focus_next(),
         Message::TabBackward => iced::widget::focus_previous(),
+
+        // ── Split pane ──────────────────────────────────────────────────
+        Message::SplitDragStart => {
+            state.dragging_split = true;
+            Task::none()
+        }
+        Message::SplitDragUpdate(x) => {
+            // Account for outer padding (14px)
+            state.split_x = (x - 14.0).clamp(250.0, 900.0);
+            Task::none()
+        }
+        Message::SplitDragEnd => {
+            state.dragging_split = false;
+            Task::none()
+        }
     }
 }
 
 // ─── Subscription ─────────────────────────────────────────────────────────────
 
-fn subscription(_state: &State) -> Subscription<Message> {
-    keyboard::on_key_press(|key, modifiers| match key {
+fn subscription(state: &State) -> Subscription<Message> {
+    let keys = keyboard::on_key_press(|key, modifiers| match key {
         keyboard::Key::Named(keyboard::key::Named::Tab) => Some(if modifiers.shift() {
             Message::TabBackward
         } else {
@@ -418,7 +465,21 @@ fn subscription(_state: &State) -> Subscription<Message> {
         }),
         keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::CancelEdit),
         _ => None,
-    })
+    });
+    if state.dragging_split {
+        let drag = event::listen_with(|event, _status, _window| match event {
+            Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                Some(Message::SplitDragUpdate(position.x))
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                Some(Message::SplitDragEnd)
+            }
+            _ => None,
+        });
+        Subscription::batch([keys, drag])
+    } else {
+        keys
+    }
 }
 
 // ─── View ─────────────────────────────────────────────────────────────────────
@@ -547,7 +608,7 @@ fn view(state: &State) -> Element<'_, Message> {
             .height(Length::Fill),
     ]
     .spacing(8)
-    .width(Length::FillPortion(3))
+    .width(state.split_x)
     .height(Length::Fill);
 
     // ── Right panel: CSV item list ─────────────────────────────────────────
@@ -584,14 +645,23 @@ fn view(state: &State) -> Element<'_, Message> {
 
     let right_panel = column![csv_header, horizontal_rule(1), csv_content,]
         .spacing(8)
-        .width(Length::FillPortion(2))
+        .width(Length::Fill)
         .height(Length::Fill);
 
     // ── Root ──────────────────────────────────────────────────────────────
+    let divider = mouse_area(
+        container(vertical_rule(1))
+            .width(8)
+            .height(Length::Fill)
+            .align_x(Alignment::Center),
+    )
+    .on_press(Message::SplitDragStart)
+    .interaction(iced::mouse::Interaction::ResizingHorizontally);
+
     column![
         topbar,
         horizontal_rule(1),
-        row![left_panel, vertical_rule(1), right_panel]
+        row![left_panel, divider, right_panel]
             .spacing(12)
             .height(Length::Fill),
     ]

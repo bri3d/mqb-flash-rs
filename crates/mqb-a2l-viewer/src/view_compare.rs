@@ -16,9 +16,10 @@ pub fn view_compare<'a>(
     ch: &'a Characteristic,
     a2l: &'a A2lFile,
     rescale_suspect: bool,
+    show_percent: bool,
 ) -> Element<'a, Msg> {
     match (v1, v2) {
-        (Some(val1), Some(val2)) => view_compare_pair(val1, val2, ch, a2l, rescale_suspect),
+        (Some(val1), Some(val2)) => view_compare_pair(val1, val2, ch, a2l, rescale_suspect, show_percent),
         (Some(val1), None) => {
             column![
                 text("BIN 1").size(13),
@@ -71,6 +72,7 @@ fn view_compare_pair<'a>(
     ch: &'a Characteristic,
     a2l: &'a A2lFile,
     rescale_suspect: bool,
+    show_percent: bool,
 ) -> Element<'a, Msg> {
     let mut outer = column![].spacing(8);
     if rescale_suspect {
@@ -78,19 +80,19 @@ fn view_compare_pair<'a>(
     }
     let content: Element<'a, Msg> = match (v1, v2) {
         (CharacteristicValues::Scalar(a), CharacteristicValues::Scalar(b)) => {
-            view_compare_scalar(*a, *b, ch, a2l)
+            view_compare_scalar(*a, *b, ch, a2l, show_percent)
         }
         (CharacteristicValues::Ascii(a), CharacteristicValues::Ascii(b)) => {
             view_compare_ascii(a, b)
         }
         (CharacteristicValues::Curve { x: x1, y: y1 }, CharacteristicValues::Curve { x: x2, y: y2 }) => {
-            view_compare_curve(x1, y1, x2, y2, ch, a2l)
+            view_compare_curve(x1, y1, x2, y2, ch, a2l, show_percent)
         }
         (CharacteristicValues::Map { x: x1, y: y1, z: z1 }, CharacteristicValues::Map { x: x2, y: y2, z: z2 }) => {
-            view_compare_map(x1, y1, z1, x2, y2, z2, ch, a2l)
+            view_compare_map(x1, y1, z1, x2, y2, z2, ch, a2l, show_percent)
         }
         (CharacteristicValues::ValBlk(a), CharacteristicValues::ValBlk(b)) => {
-            view_compare_val_blk(a, b, ch, a2l)
+            view_compare_val_blk(a, b, ch, a2l, show_percent)
         }
         _ => {
             // Type mismatch — show both separately
@@ -109,16 +111,19 @@ fn view_compare_pair<'a>(
     outer.into()
 }
 
-fn view_compare_scalar<'a>(v1: f64, v2: f64, ch: &'a Characteristic, a2l: &'a A2lFile) -> Element<'a, Msg> {
+fn view_compare_scalar<'a>(v1: f64, v2: f64, ch: &'a Characteristic, a2l: &'a A2lFile, show_percent: bool) -> Element<'a, Msg> {
     let cm = a2l.compu_methods.get(&ch.compu_method_ref);
     let unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
 
     let delta = v2 - v1;
     let pct = pct_diff(v1, v2);
-    let pct_str = format_pct(pct);
 
-    let sign = if delta > 0.0 { "+" } else { "" };
-    let delta_str = format!("{sign}{}", format_val(delta));
+    let diff_annotation = if show_percent {
+        format_pct(pct)
+    } else {
+        let sign = if delta > 0.0 { "+" } else { "" };
+        format!("{sign}{}", format_val(delta))
+    };
 
     let mut col = column![].spacing(4);
 
@@ -145,7 +150,7 @@ fn view_compare_scalar<'a>(v1: f64, v2: f64, ch: &'a Characteristic, a2l: &'a A2
     col = col.push(
         row![
             text(format!("BIN 2:  {:.6} {unit}", v2)).size(16),
-            container(text(format!("  ({delta_str}, {pct_str})")).size(14))
+            container(text(format!("  ({diff_annotation})")).size(14))
                 .style(move |theme: &Theme| container::Style {
                     text_color: Some(diff_pct_color(pct, theme)),
                     ..Default::default()
@@ -186,6 +191,7 @@ fn view_compare_curve<'a>(
     x2: &'a [f64], y2: &'a [f64],
     ch: &'a Characteristic,
     a2l: &'a A2lFile,
+    show_percent: bool,
 ) -> Element<'a, Msg> {
     let cm = a2l.compu_methods.get(&ch.compu_method_ref);
     let val_unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
@@ -226,13 +232,13 @@ fn view_compare_curve<'a>(
 
     if axes_same {
         // Same axes — aligned comparison
+        let delta_header = if show_percent { "%" } else { "Δ" };
         col = col.push(
             row![
                 text(format!("X ({axis_unit})")).size(12).width(100).font(MONO),
                 text(format!("BIN 1 ({val_unit})")).size(12).width(100).font(MONO),
                 text(format!("BIN 2 ({val_unit})")).size(12).width(100).font(MONO),
-                text("Δ").size(12).width(80).font(MONO),
-                text("%").size(12).width(70).font(MONO),
+                text(delta_header).size(12).width(80).font(MONO),
             ]
             .spacing(4),
         );
@@ -245,9 +251,12 @@ fn view_compare_curve<'a>(
             let v2 = y2[i];
             let delta = v2 - v1;
             let pct = pct_diff(v1, v2);
-            let sign = if delta > 0.0 { "+" } else { "" };
-            let delta_str = format!("{sign}{}", format_val(delta));
-            let pct_str = format_pct(pct);
+            let diff_str = if show_percent {
+                format_pct(pct)
+            } else {
+                let sign = if delta > 0.0 { "+" } else { "" };
+                format!("{sign}{}", format_val(delta))
+            };
 
             col = col.push(
                 row![
@@ -262,12 +271,7 @@ fn view_compare_curve<'a>(
                                 ..Default::default()
                             }
                         }),
-                    container(text(delta_str).size(12).width(80).font(MONO))
-                        .style(move |theme: &Theme| container::Style {
-                            text_color: Some(diff_pct_color(pct, theme)),
-                            ..Default::default()
-                        }),
-                    container(text(pct_str).size(12).width(70).font(MONO))
+                    container(text(diff_str).size(12).width(80).font(MONO))
                         .style(move |theme: &Theme| container::Style {
                             text_color: Some(diff_pct_color(pct, theme)),
                             ..Default::default()
@@ -290,15 +294,16 @@ fn view_compare_curve<'a>(
                     ..Default::default()
                 })
         );
+        let dx_header = if show_percent { "%X" } else { "ΔX" };
+        let dy_header = if show_percent { "%Y" } else { "ΔY" };
         col = col.push(
             row![
                 text(format!("X1 ({axis_unit})")).size(12).width(90).font(MONO),
                 text(format!("BIN 1 ({val_unit})")).size(12).width(90).font(MONO),
                 text(format!("X2 ({axis_unit})")).size(12).width(90).font(MONO),
                 text(format!("BIN 2 ({val_unit})")).size(12).width(90).font(MONO),
-                text("ΔX").size(12).width(70).font(MONO),
-                text("ΔY").size(12).width(70).font(MONO),
-                text("%Y").size(12).width(60).font(MONO),
+                text(dx_header).size(12).width(70).font(MONO),
+                text(dy_header).size(12).width(70).font(MONO),
             ]
             .spacing(4),
         );
@@ -314,12 +319,22 @@ fn view_compare_curve<'a>(
             let y_delta = v2 - v1;
             let y_pct = pct_diff(v1, v2);
             let x_changed = (x_delta).abs() > 1e-9;
-            let x_sign = if x_delta > 0.0 { "+" } else { "" };
-            let y_sign = if y_delta > 0.0 { "+" } else { "" };
-            let x_delta_str = if x_changed { format!("{x_sign}{}", format_val(x_delta)) } else { "".to_string() };
-            let y_delta_str = format!("{y_sign}{}", format_val(y_delta));
-            let y_pct_str = format_pct(y_pct);
             let x_pct = pct_diff(xv1, xv2);
+
+            let x_diff_str = if !x_changed {
+                String::new()
+            } else if show_percent {
+                format_pct(x_pct)
+            } else {
+                let x_sign = if x_delta > 0.0 { "+" } else { "" };
+                format!("{x_sign}{}", format_val(x_delta))
+            };
+            let y_diff_str = if show_percent {
+                format_pct(y_pct)
+            } else {
+                let y_sign = if y_delta > 0.0 { "+" } else { "" };
+                format!("{y_sign}{}", format_val(y_delta))
+            };
 
             col = col.push(
                 row![
@@ -347,17 +362,12 @@ fn view_compare_curve<'a>(
                                 ..Default::default()
                             }
                         }),
-                    container(text(x_delta_str).size(12).width(70).font(MONO))
+                    container(text(x_diff_str).size(12).width(70).font(MONO))
                         .style(move |theme: &Theme| container::Style {
                             text_color: Some(diff_pct_color(x_pct, theme)),
                             ..Default::default()
                         }),
-                    container(text(y_delta_str).size(12).width(70).font(MONO))
-                        .style(move |theme: &Theme| container::Style {
-                            text_color: Some(diff_pct_color(y_pct, theme)),
-                            ..Default::default()
-                        }),
-                    container(text(y_pct_str).size(12).width(60).font(MONO))
+                    container(text(y_diff_str).size(12).width(70).font(MONO))
                         .style(move |theme: &Theme| container::Style {
                             text_color: Some(diff_pct_color(y_pct, theme)),
                             ..Default::default()
@@ -377,6 +387,7 @@ fn view_compare_map<'a>(
     x2: &'a [f64], y2: &'a [f64], z2: &'a [Vec<f64>],
     ch: &'a Characteristic,
     a2l: &'a A2lFile,
+    show_percent: bool,
 ) -> Element<'a, Msg> {
     let cm = a2l.compu_methods.get(&ch.compu_method_ref);
     let val_unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
@@ -390,8 +401,13 @@ fn view_compare_map<'a>(
         col = col.push(text(format!("BIN 1 — {}x{} map (unit: {val_unit})", x1.len(), y1.len())).size(13));
         col = col.push(map_table(x1, y1, z1, ch.lower_limit, ch.upper_limit));
 
-        col = col.push(text("BIN 2 — diff coloring (red=increase, green=decrease)").size(13));
-        col = col.push(diff_map_table(x1, y1, z1, z2));
+        let diff_label = if show_percent {
+            "BIN 2 — % change (red=increase, green=decrease)"
+        } else {
+            "BIN 2 — diff coloring (red=increase, green=decrease)"
+        };
+        col = col.push(text(diff_label).size(13));
+        col = col.push(diff_map_table(x1, y1, z1, z2, show_percent));
     } else {
         // Different axes — show both maps independently with axis change summary
         let x_same = x1 == x2;
@@ -440,8 +456,13 @@ fn view_compare_map<'a>(
 
         // If same grid size, also show a diff map aligned to BIN 2's axes
         if size_same {
-            col = col.push(text("Difference (BIN 2 axes, red=increase, green=decrease)").size(13));
-            col = col.push(diff_map_table(x2, y2, z1, z2));
+            let diff_label = if show_percent {
+                "Difference — % change (BIN 2 axes, red=increase, green=decrease)"
+            } else {
+                "Difference (BIN 2 axes, red=increase, green=decrease)"
+            };
+            col = col.push(text(diff_label).size(13));
+            col = col.push(diff_map_table(x2, y2, z1, z2, show_percent));
         }
     }
 
@@ -458,6 +479,7 @@ fn view_compare_val_blk<'a>(
     vals2: &'a [f64],
     ch: &'a Characteristic,
     a2l: &'a A2lFile,
+    show_percent: bool,
 ) -> Element<'a, Msg> {
     let cm = a2l.compu_methods.get(&ch.compu_method_ref);
     let unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
@@ -466,13 +488,13 @@ fn view_compare_val_blk<'a>(
     col = col.push(text(format!("{} values (unit: {unit})", vals1.len().max(vals2.len()))).size(12));
 
     // Header
+    let delta_header = if show_percent { "%" } else { "Δ" };
     col = col.push(
         row![
             text("Idx").size(12).width(40).font(MONO),
             text("BIN 1").size(12).width(100).font(MONO),
             text("BIN 2").size(12).width(100).font(MONO),
-            text("Δ").size(12).width(80).font(MONO),
-            text("%").size(12).width(70).font(MONO),
+            text(delta_header).size(12).width(80).font(MONO),
         ]
         .spacing(4),
     );
@@ -484,9 +506,12 @@ fn view_compare_val_blk<'a>(
         let v2 = vals2.get(i).copied().unwrap_or(0.0);
         let delta = v2 - v1;
         let pct = pct_diff(v1, v2);
-        let sign = if delta > 0.0 { "+" } else { "" };
-        let delta_str = format!("{sign}{}", format_val(delta));
-        let pct_str = format_pct(pct);
+        let diff_str = if show_percent {
+            format_pct(pct)
+        } else {
+            let sign = if delta > 0.0 { "+" } else { "" };
+            format!("{sign}{}", format_val(delta))
+        };
 
         col = col.push(
             row![
@@ -501,12 +526,7 @@ fn view_compare_val_blk<'a>(
                             ..Default::default()
                         }
                     }),
-                container(text(delta_str).size(12).width(80).font(MONO))
-                    .style(move |theme: &Theme| container::Style {
-                        text_color: Some(diff_pct_color(pct, theme)),
-                        ..Default::default()
-                    }),
-                container(text(pct_str).size(12).width(70).font(MONO))
+                container(text(diff_str).size(12).width(80).font(MONO))
                     .style(move |theme: &Theme| container::Style {
                         text_color: Some(diff_pct_color(pct, theme)),
                         ..Default::default()

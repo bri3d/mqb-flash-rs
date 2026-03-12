@@ -18,9 +18,18 @@ pub fn view(state: &State) -> Element<'_, Msg> {
     let left = view_left_panel(state);
     let right = view_right_panel(state);
 
+    let divider = mouse_area(
+        container(vertical_rule(1))
+            .width(8)
+            .height(Length::Fill)
+            .align_x(Alignment::Center),
+    )
+    .on_press(Msg::SplitDragStart)
+    .interaction(iced::mouse::Interaction::ResizingHorizontally);
+
     row![
-        container(left).width(380).height(Length::Fill),
-        vertical_rule(1),
+        container(left).width(state.split_x).height(Length::Fill),
+        divider,
         container(right).width(Length::Fill).height(Length::Fill).padding(10),
     ]
     .into()
@@ -368,6 +377,19 @@ fn view_right_panel(state: &State) -> Element<'_, Msg> {
 
     // Values — single mode or compare mode
     if state.compare_mode && state.binary2.is_some() {
+        // View options toolbar
+        let pct_btn = button(text("%").size(12).font(MONO))
+            .on_press(Msg::TogglePercent)
+            .padding([2, 8])
+            .style(if state.show_percent { button::primary } else { button::secondary });
+        let toolbar = row![
+            pct_btn,
+            text("P").size(10).color(Color::from_rgb(0.45, 0.45, 0.45)),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center);
+        col = col.push(toolbar);
+
         // Compare mode
         if state.binary.is_none() {
             col = col.push(
@@ -387,6 +409,7 @@ fn view_right_panel(state: &State) -> Element<'_, Msg> {
                 ch,
                 a2l,
                 is_rescale_suspect,
+                state.show_percent,
             ));
         }
     } else {

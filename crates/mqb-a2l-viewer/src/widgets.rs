@@ -85,12 +85,13 @@ pub fn map_table<'a>(
     tbl
 }
 
-/// Build a diff map table: shows BIN 2 values colored by difference from BIN 1.
+/// Build a diff map table: shows BIN 2 values (or % change) colored by difference from BIN 1.
 pub fn diff_map_table<'a>(
     x: &[f64],
     y: &[f64],
     z1: &[Vec<f64>],
     z2: &[Vec<f64>],
+    show_percent: bool,
 ) -> iced::widget::Column<'a, Msg> {
     let cell_w: f32 = 80.0;
 
@@ -150,7 +151,11 @@ pub fn diff_map_table<'a>(
                     .copied()
                     .unwrap_or(0.0);
                 let pct = pct_diff(val1, *val2);
-                let v = format_val(*val2);
+                let v = if show_percent {
+                    format_pct(pct)
+                } else {
+                    format_val(*val2)
+                };
 
                 data_row = data_row.push(
                     container(text(v).size(11).font(MONO))

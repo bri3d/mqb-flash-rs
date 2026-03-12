@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use iced::event::{self, Event};
+use iced::mouse;
 use iced::widget::scrollable::{self, RelativeOffset};
-use iced::{keyboard, Task};
+use iced::{keyboard, Subscription, Task};
 
 use mqb_a2l::reader::{CharacteristicValues, make_resolver, read_characteristic};
 use mqb_a2l::A2lFile;
@@ -10,14 +12,29 @@ use mqb_a2l::A2lFile;
 use crate::data::{address_map_for, build_categories};
 use crate::state::{Msg, State};
 
-pub fn subscription(_state: &State) -> iced::Subscription<Msg> {
-    keyboard::on_key_press(|key, _modifiers| {
+pub fn subscription(state: &State) -> Subscription<Msg> {
+    let keys = keyboard::on_key_press(|key, _modifiers| {
         match key {
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Msg::SelectNext),
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Msg::SelectPrev),
+            keyboard::Key::Character(c) if c.as_str() == "p" || c.as_str() == "P" => Some(Msg::TogglePercent),
             _ => None,
         }
-    })
+    });
+    if state.dragging_split {
+        let drag = event::listen_with(|event, _status, _window| match event {
+            Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                Some(Msg::SplitDragUpdate(position.x))
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                Some(Msg::SplitDragEnd)
+            }
+            _ => None,
+        });
+        Subscription::batch([keys, drag])
+    } else {
+        keys
+    }
 }
 
 pub fn update(state: &mut State, msg: Msg) -> Task<Msg> {
@@ -194,6 +211,18 @@ pub fn update(state: &mut State, msg: Msg) -> Task<Msg> {
             state.computing_changes = false;
             // Rebuild filter in case show_changed_only is active
             state.rebuild_filter();
+        }
+        Msg::TogglePercent => {
+            state.show_percent = !state.show_percent;
+        }
+        Msg::SplitDragStart => {
+            state.dragging_split = true;
+        }
+        Msg::SplitDragUpdate(x) => {
+            state.split_x = x.clamp(200.0, 800.0);
+        }
+        Msg::SplitDragEnd => {
+            state.dragging_split = false;
         }
     }
     Task::none()
