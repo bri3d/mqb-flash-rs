@@ -22,9 +22,10 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use automotive::can::{AsyncCanAdapter, Identifier};
+use automotive::can::bitrate::BitrateBuilder;
 use automotive::isotp::{IsoTPAdapter, IsoTPConfig};
 use automotive::uds::{RoutineControlType, UDSClient};
-use automotive::{IsoTpTransport, StreamExt};
+use automotive::{TransportLayer, StreamExt};
 
 use mqb_modules::{BlockCrypto, FlashInfo, PreparedBlockData};
 use mqb_sa2::Sa2Vm;
@@ -260,13 +261,25 @@ async fn flash_via_panda(
     blocks: &[PreparedBlockData],
     opts: &FlashOptions,
 ) -> Result<(), FlashError> {
-    let panda = automotive::panda::Panda::new()
+    let bitrate_cfg = BitrateBuilder::new::<automotive::panda::Panda>()
+        .bitrate(500_000)
+        .build()
+        .map_err(|e| FlashError::Interface(format!("Panda bitrate config error: {e}")))?;
+    let panda = automotive::panda::Panda::new(bitrate_cfg)
         .map_err(|e| FlashError::Interface(format!("Panda open error: {e}")))?;
     let adapter = AsyncCanAdapter::new(panda);
     run_with_adapter(&adapter, flash_info, blocks, opts).await
 }
 
 // ── J2534 dispatch ────────────────────────────────────────────────────────────
+
+#[cfg(feature = "j2534")]
+fn j2534_bitrate_config(bitrate: u32) -> Result<automotive::can::bitrate::BitrateConfig, FlashError> {
+    BitrateBuilder::new::<automotive::j2534::J2534CanAdapter>()
+        .bitrate(bitrate)
+        .build()
+        .map_err(|e| FlashError::Interface(format!("J2534 bitrate config error: {e}")))
+}
 
 #[cfg(feature = "j2534")]
 async fn flash_via_j2534(
@@ -277,6 +290,8 @@ async fn flash_via_j2534(
     blocks: &[PreparedBlockData],
     opts: &FlashOptions,
 ) -> Result<(), FlashError> {
+    let bitrate_cfg = j2534_bitrate_config(bitrate)?;
+
     if native_isotp {
         // VW ECUs require an OBD-II DTC clear before the programming
         // precondition check.  Open a temporary ISO 15765 transport on the
@@ -288,7 +303,7 @@ async fn flash_via_j2534(
             Identifier::Standard(0x700),
             Identifier::Standard(0x7E8),
         );
-        match automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate, obd_config) {
+        match automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate_cfg, obd_config) {
             Ok(obd) => {
                 send_obd_dtc_clear::<J2534NativeIsoTpTransport>(&obd).await;
                 tokio::task::spawn_blocking(move || drop(obd))
@@ -306,7 +321,7 @@ async fn flash_via_j2534(
         }
         let transport = automotive::j2534::J2534NativeIsoTpTransport::new(
             dll,
-            bitrate,
+            bitrate_cfg,
             flash_config,
         )
         .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
@@ -324,7 +339,7 @@ async fn flash_via_j2534(
                 Identifier::Standard(0x700),
                 Identifier::Standard(0x7E8),
             );
-            match automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate, obd_config) {
+            match automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate_cfg, obd_config) {
                 Ok(obd) => {
                     send_obd_dtc_clear::<J2534NativeIsoTpTransport>(&obd).await;
                     tokio::task::spawn_blocking(move || drop(obd));
@@ -337,7 +352,7 @@ async fn flash_via_j2534(
 
         result
     } else {
-        let j = automotive::j2534::J2534CanAdapter::new(dll, bitrate)
+        let j = automotive::j2534::J2534CanAdapter::new(dll, bitrate_cfg)
             .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
         let adapter = AsyncCanAdapter::new(j);
         let result = run_with_adapter(&adapter, flash_info, blocks, opts).await;
@@ -377,11 +392,11 @@ fn make_isotp_config(flash_info: &FlashInfo) -> IsoTPConfig {
 
 // ── Generic transport runner ──────────────────────────────────────────────────
 
-/// Run the flash sequence over any [`IsoTpTransport`] implementation.
+/// Run the flash sequence over any [`TransportLayer`] implementation.
 ///
 /// Used by both the software ISO-TP path (via [`run_with_adapter`]) and the
 /// native J2534 ISO 15765 path.
-async fn run_with_transport<T: IsoTpTransport>(
+async fn run_with_transport<T: TransportLayer>(
     transport: &T,
     flash_info: &FlashInfo,
     blocks: &[PreparedBlockData],
@@ -437,7 +452,7 @@ fn send_progress(opts: &FlashOptions, update: ProgressUpdate) {
 /// are consumed transparently.  Each pending response resets the 5 s timeout.
 /// Errors and timeouts are logged and ignored — a failed DTC clear must not
 /// abort the flash sequence.
-async fn send_obd_dtc_clear<T: IsoTpTransport>(transport: &T) {
+async fn send_obd_dtc_clear<T: TransportLayer>(transport: &T) {
     tracing::info!("Sending OBD-II mode 04 (Clear DTCs) [tester=0x700, ECU=0x7E8]");
     if let Err(e) = transport.send(&[0x04]).await {
         tracing::warn!("OBD DTC clear send failed: {e} (continuing)");
@@ -490,7 +505,7 @@ async fn send_obd_dtc_clear_via_adapter(adapter: &AsyncCanAdapter) {
 
 // ── Core flash sequence ───────────────────────────────────────────────────────
 
-async fn run_flash_sequence<T: IsoTpTransport>(
+async fn run_flash_sequence<T: TransportLayer>(
     uds: &UDSClient<'_, T>,
     flash_info: &FlashInfo,
     blocks: &[PreparedBlockData],
@@ -608,7 +623,7 @@ async fn run_flash_sequence<T: IsoTpTransport>(
 
 // ── Normal block (1–5) ────────────────────────────────────────────────────────
 
-async fn flash_normal_block<T: IsoTpTransport>(
+async fn flash_normal_block<T: TransportLayer>(
     uds: &UDSClient<'_, T>,
     flash_info: &FlashInfo,
     block: &PreparedBlockData,
@@ -702,7 +717,7 @@ async fn flash_normal_block<T: IsoTpTransport>(
 
 const MAX_PATCH_RETRIES: usize = 10;
 
-async fn flash_patch_block<T: IsoTpTransport>(
+async fn flash_patch_block<T: TransportLayer>(
     uds: &UDSClient<'_, T>,
     flash_info: &FlashInfo,
     block: &PreparedBlockData,
@@ -807,7 +822,11 @@ pub async fn read_ecu_data(
             read_ecu_via_socketcan(iface, flash_info).await
         }
         Interface::Panda => {
-            let panda = automotive::panda::Panda::new()
+            let bitrate_cfg = BitrateBuilder::new::<automotive::panda::Panda>()
+                .bitrate(500_000)
+                .build()
+                .map_err(|e| FlashError::Interface(format!("Panda bitrate config error: {e}")))?;
+            let panda = automotive::panda::Panda::new(bitrate_cfg)
                 .map_err(|e| FlashError::Interface(format!("Panda open error: {e}")))?;
             let adapter = AsyncCanAdapter::new(panda);
             read_ecu_with_adapter(&adapter, flash_info).await
@@ -825,11 +844,13 @@ async fn read_ecu_via_j2534(
     native_isotp: bool,
     flash_info: &FlashInfo,
 ) -> Result<HashMap<String, String>, FlashError> {
+    let bitrate_cfg = j2534_bitrate_config(bitrate)?;
+
     if native_isotp {
         let config = make_isotp_config(flash_info);
         let transport = automotive::j2534::J2534NativeIsoTpTransport::new(
             dll,
-            bitrate,
+            bitrate_cfg,
             config,
         )
         .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
@@ -839,7 +860,7 @@ async fn read_ecu_via_j2534(
         tokio::task::spawn_blocking(move || drop(transport));
         result
     } else {
-        let j = automotive::j2534::J2534CanAdapter::new(dll, bitrate)
+        let j = automotive::j2534::J2534CanAdapter::new(dll, bitrate_cfg)
             .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
         let adapter = AsyncCanAdapter::new(j);
         let result = read_ecu_with_adapter(&adapter, flash_info).await;
@@ -893,7 +914,7 @@ async fn read_ecu_with_adapter(
     read_ecu_with_transport(&isotp).await
 }
 
-async fn read_ecu_with_transport<T: IsoTpTransport>(
+async fn read_ecu_with_transport<T: TransportLayer>(
     transport: &T,
 ) -> Result<HashMap<String, String>, FlashError> {
     let uds = UDSClient::new(transport);

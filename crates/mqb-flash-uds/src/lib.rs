@@ -10,4 +10,4 @@ pub use fake_adapter::FakeCanAdapter;
 pub use mqb_sa2::Sa2Vm;
 #[cfg(feature = "j2534")]
 pub use automotive::j2534::{J2534CanAdapter, J2534NativeIsoTpTransport};
-pub use automotive::IsoTpTransport;
+pub use automotive::TransportLayer;

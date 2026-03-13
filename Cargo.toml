@@ -40,7 +40,7 @@ mqb-flash-uds = { path = "crates/mqb-flash-uds" }
 mqb-a2l       = { path = "crates/mqb-a2l" }
 
 # External
-automotive  = { version = "0.3", default-features = false, features = ["panda"] }
+automotive  = { version = "0.4", default-features = false, features = ["panda"] }
 zip         = "2"
 aes         = "0.8"
 cbc         = { version = "0.1", features = ["alloc"] }
@@ -58,7 +58,3 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 iced        = { version = "0.13", features = ["tokio"] }
 rfd         = "0.15"
 
-[patch.crates-io]
-# automotive 0.3.0 uses `(1 << 32) - 1` for a usize constant, which overflows
-# on 32-bit targets. Patched locally until upstream fixes it.
-automotive = { path = "vendor/automotive" }
