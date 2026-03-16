@@ -9,7 +9,7 @@ use iced::{keyboard, Subscription, Task};
 use mqb_a2l::reader::{CharacteristicValues, make_resolver, read_characteristic};
 use mqb_a2l::A2lFile;
 
-use crate::data::{address_map_for, build_categories};
+use crate::data::{address_map_for, build_categories, detect_module_from_bin};
 use crate::state::{Msg, State};
 
 pub fn subscription(state: &State) -> Subscription<Msg> {
@@ -114,6 +114,13 @@ pub fn update(state: &mut State, msg: Msg) -> Task<Msg> {
             state.loading_bin = false;
         }
         Msg::BinLoaded(Ok(data)) => {
+            // Auto-detect module from BIN header
+            if let Some(detected) = detect_module_from_bin(&data) {
+                if detected != state.module {
+                    state.module = detected;
+                    state.address_map = address_map_for(detected);
+                }
+            }
             state.binary = Some(data);
             state.loading_bin = false;
             state.read_selected();
@@ -163,12 +170,6 @@ pub fn update(state: &mut State, msg: Msg) -> Task<Msg> {
             state.bin2_error = Some(e);
             state.loading_bin2 = false;
         }
-        Msg::ModuleChanged(m) => {
-            state.module = m;
-            state.address_map = address_map_for(m);
-            state.read_selected();
-            return maybe_compute_changes(state);
-        }
         Msg::CategoryChanged(cat) => {
             state.selected_category = Some(cat);
             state.rebuild_filter();
@@ -197,6 +198,7 @@ pub fn update(state: &mut State, msg: Msg) -> Task<Msg> {
             state.compare_mode = on;
             if !on {
                 state.show_changed_only = false;
+                state.show_rescale_only = false;
             }
             state.read_selected();
             state.rebuild_filter();
@@ -205,11 +207,28 @@ pub fn update(state: &mut State, msg: Msg) -> Task<Msg> {
             state.show_changed_only = on;
             state.rebuild_filter();
         }
-        Msg::ChangedSetComputed { changed, axis_changed_values_same } => {
+        Msg::ChangedSetComputed { changed, axis_changed_values_same, rescale_uniform } => {
             state.changed_set = changed;
             state.axis_changed_values_same = axis_changed_values_same;
+            state.rescale_uniform = rescale_uniform;
             state.computing_changes = false;
             // Rebuild filter in case show_changed_only is active
+            state.rebuild_filter();
+        }
+        Msg::ToggleRescaleOnly(on) => {
+            state.show_rescale_only = on;
+            state.rebuild_filter();
+        }
+        Msg::ToggleHideUniform(on) => {
+            state.hide_rescale_uniform = on;
+            state.rebuild_filter();
+        }
+        Msg::FilterByAxis(name) => {
+            state.axis_filter = Some(name);
+            state.rebuild_filter();
+        }
+        Msg::ClearAxisFilter => {
+            state.axis_filter = None;
             state.rebuild_filter();
         }
         Msg::TogglePercent => {
@@ -246,6 +265,7 @@ fn maybe_compute_changes(state: &mut State) -> Task<Msg> {
     state.computing_changes = true;
     state.changed_set.clear();
     state.axis_changed_values_same.clear();
+    state.rescale_uniform.clear();
 
     let a2l = Arc::clone(a2l);
     let bin1 = Arc::clone(bin1);
@@ -256,24 +276,26 @@ fn maybe_compute_changes(state: &mut State) -> Task<Msg> {
         async move {
             compute_changed_set(&a2l, &bin1, &bin2, &map)
         },
-        |(changed, axis_changed_values_same)| Msg::ChangedSetComputed {
+        |(changed, axis_changed_values_same, rescale_uniform)| Msg::ChangedSetComputed {
             changed,
             axis_changed_values_same,
+            rescale_uniform,
         },
     )
 }
 
 /// Compare all characteristics between two binaries.
-/// Returns (changed_indices, axis_changed_values_same_indices).
+/// Returns (changed_indices, axis_changed_values_same_indices, rescale_uniform_indices).
 fn compute_changed_set(
     a2l: &A2lFile,
     bin1: &[u8],
     bin2: &[u8],
     map: &mqb_a2l::reader::AddressMap,
-) -> (HashSet<usize>, HashSet<usize>) {
+) -> (HashSet<usize>, HashSet<usize>, HashSet<usize>) {
     let resolve = make_resolver(map);
     let mut changed = HashSet::new();
     let mut axis_changed_values_same = HashSet::new();
+    let mut rescale_uniform = HashSet::new();
     for (i, ch) in a2l.characteristics.iter().enumerate() {
         let v1 = read_characteristic(ch, a2l, bin1, &resolve);
         let v2 = read_characteristic(ch, a2l, bin2, &resolve);
@@ -282,13 +304,46 @@ fn compute_changed_set(
                 changed.insert(i);
                 if has_axis_change_without_rescale(a, b) {
                     axis_changed_values_same.insert(i);
+                    if has_uniform_data_values(a) {
+                        rescale_uniform.insert(i);
+                    }
                 }
             }
             (None, Some(_)) | (Some(_), None) => { changed.insert(i); }
             _ => {}
         }
     }
-    (changed, axis_changed_values_same)
+    (changed, axis_changed_values_same, rescale_uniform)
+}
+
+/// Returns true if all data values (Y for curves, Z for maps, W for cuboids)
+/// are the same value — e.g. a table of all 1.0 (likely a placeholder).
+fn has_uniform_data_values(v: &CharacteristicValues) -> bool {
+    match v {
+        CharacteristicValues::Curve { y, .. } => {
+            y.len() > 1 && y.iter().all(|&val| val == y[0])
+        }
+        CharacteristicValues::Map { z, .. } => {
+            let first = z.first().and_then(|r| r.first()).copied();
+            if let Some(f) = first {
+                z.iter().all(|row| row.iter().all(|&val| val == f))
+            } else {
+                false
+            }
+        }
+        CharacteristicValues::Cuboid { w, .. } => {
+            let first = w.first()
+                .and_then(|s| s.first())
+                .and_then(|r| r.first())
+                .copied();
+            if let Some(f) = first {
+                w.iter().all(|slice| slice.iter().all(|row| row.iter().all(|&val| val == f)))
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
 }
 
 /// Returns true if the axes differ but the data values are identical —

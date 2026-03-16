@@ -85,8 +85,120 @@ pub fn map_table<'a>(
     tbl
 }
 
-/// Build a diff map table: shows BIN 2 values (or % change) colored by difference from BIN 1.
-pub fn diff_map_table<'a>(
+/// Like `map_table`, but colors axis headers based on diff from old axis values.
+/// `x_old`/`y_old` may differ in length from `x`/`y` — only matching indices are compared.
+pub fn map_table_with_axis_diff<'a>(
+    x_old: &[f64],
+    y_old: &[f64],
+    x: &[f64],
+    y: &[f64],
+    data: &[Vec<f64>],
+    lower: f64,
+    upper: f64,
+) -> iced::widget::Column<'a, Msg> {
+    let cell_w: f32 = 80.0;
+
+    // X-axis header row
+    let mut header = row![].spacing(0);
+    header = header.push(
+        container(text("").size(11)).width(cell_w)
+            .style(|theme: &Theme| {
+                let (bg, _) = map_header_colors(theme);
+                container::Style { background: Some(bg.into()), ..Default::default() }
+            })
+    );
+    for (xi_idx, xi) in x.iter().enumerate() {
+        let v = format_val(*xi);
+        let pct = x_old.get(xi_idx)
+            .map(|old| pct_diff(*old, *xi))
+            .unwrap_or(f64::INFINITY);
+        let changed = pct.abs() > 0.001;
+        header = header.push(
+            container(text(v).size(11).font(MONO))
+                .width(cell_w)
+                .align_x(iced::alignment::Horizontal::Right)
+                .padding([0, 4])
+                .style(move |theme: &Theme| {
+                    if changed {
+                        let (bg, fg) = diff_cell_colors(pct, theme);
+                        container::Style {
+                            background: Some(bg.into()),
+                            text_color: Some(fg),
+                            ..Default::default()
+                        }
+                    } else {
+                        let (bg, fg) = map_header_colors(theme);
+                        container::Style {
+                            background: Some(bg.into()),
+                            text_color: Some(fg),
+                            ..Default::default()
+                        }
+                    }
+                }),
+        );
+    }
+    let mut tbl = column![header, horizontal_rule(1)].spacing(0);
+
+    // Data rows
+    for (yi_idx, yi) in y.iter().enumerate() {
+        let mut data_row = row![].spacing(0);
+        let y_pct = y_old.get(yi_idx)
+            .map(|old| pct_diff(*old, *yi))
+            .unwrap_or(f64::INFINITY);
+        let y_changed = y_pct.abs() > 0.001;
+        data_row = data_row.push(
+            container(text(format_val(*yi)).size(11).font(MONO))
+                .width(cell_w)
+                .align_x(iced::alignment::Horizontal::Right)
+                .padding([0, 4])
+                .style(move |theme: &Theme| {
+                    if y_changed {
+                        let (bg, fg) = diff_cell_colors(y_pct, theme);
+                        container::Style {
+                            background: Some(bg.into()),
+                            text_color: Some(fg),
+                            ..Default::default()
+                        }
+                    } else {
+                        let (bg, fg) = map_header_colors(theme);
+                        container::Style {
+                            background: Some(bg.into()),
+                            text_color: Some(fg),
+                            ..Default::default()
+                        }
+                    }
+                }),
+        );
+        if let Some(row_data) = data.get(yi_idx) {
+            for val in row_data {
+                let intensity = ((*val - lower) / (upper - lower).max(1e-9)).clamp(0.0, 1.0) as f32;
+                let v = format_val(*val);
+                data_row = data_row.push(
+                    container(text(v).size(11).font(MONO))
+                        .width(cell_w)
+                        .align_x(iced::alignment::Horizontal::Right)
+                        .padding([0, 4])
+                        .style(move |theme: &Theme| {
+                            let (bg, fg) = map_cell_colors(intensity, theme);
+                            container::Style {
+                                background: Some(bg.into()),
+                                text_color: Some(fg),
+                                ..Default::default()
+                            }
+                        }),
+                );
+            }
+        }
+        tbl = tbl.push(data_row);
+    }
+    tbl
+}
+
+/// Diff map table: shows BIN 2 values (or % change) colored by difference from BIN 1.
+/// Axis headers are also colored by diff from old axis values.
+pub fn diff_map_table_with_axis_diff<'a>(
+    x_old: &[f64],
+    y_old: &[f64],
     x: &[f64],
     y: &[f64],
     z1: &[Vec<f64>],
@@ -104,39 +216,65 @@ pub fn diff_map_table<'a>(
                 container::Style { background: Some(bg.into()), ..Default::default() }
             })
     );
-    for xi in x {
+    for (xi_idx, xi) in x.iter().enumerate() {
         let v = format_val(*xi);
+        let pct = x_old.get(xi_idx)
+            .map(|old| pct_diff(*old, *xi))
+            .unwrap_or(f64::INFINITY);
+        let changed = pct.abs() > 0.001;
         header = header.push(
             container(text(v).size(11).font(MONO))
                 .width(cell_w)
                 .align_x(iced::alignment::Horizontal::Right)
                 .padding([0, 4])
-                .style(|theme: &Theme| {
-                    let (bg, fg) = map_header_colors(theme);
-                    container::Style {
-                        background: Some(bg.into()),
-                        text_color: Some(fg),
-                        ..Default::default()
+                .style(move |theme: &Theme| {
+                    if changed {
+                        let (bg, fg) = diff_cell_colors(pct, theme);
+                        container::Style {
+                            background: Some(bg.into()),
+                            text_color: Some(fg),
+                            ..Default::default()
+                        }
+                    } else {
+                        let (bg, fg) = map_header_colors(theme);
+                        container::Style {
+                            background: Some(bg.into()),
+                            text_color: Some(fg),
+                            ..Default::default()
+                        }
                     }
                 }),
         );
     }
     let mut tbl = column![header, horizontal_rule(1)].spacing(0);
 
-    // Data rows — show BIN 2 values, colored by diff
+    // Data rows
     for (yi_idx, yi) in y.iter().enumerate() {
         let mut data_row = row![].spacing(0);
+        let y_pct = y_old.get(yi_idx)
+            .map(|old| pct_diff(*old, *yi))
+            .unwrap_or(f64::INFINITY);
+        let y_changed = y_pct.abs() > 0.001;
         data_row = data_row.push(
             container(text(format_val(*yi)).size(11).font(MONO))
                 .width(cell_w)
                 .align_x(iced::alignment::Horizontal::Right)
                 .padding([0, 4])
-                .style(|theme: &Theme| {
-                    let (bg, fg) = map_header_colors(theme);
-                    container::Style {
-                        background: Some(bg.into()),
-                        text_color: Some(fg),
-                        ..Default::default()
+                .style(move |theme: &Theme| {
+                    if y_changed {
+                        let (bg, fg) = diff_cell_colors(y_pct, theme);
+                        container::Style {
+                            background: Some(bg.into()),
+                            text_color: Some(fg),
+                            ..Default::default()
+                        }
+                    } else {
+                        let (bg, fg) = map_header_colors(theme);
+                        container::Style {
+                            background: Some(bg.into()),
+                            text_color: Some(fg),
+                            ..Default::default()
+                        }
                     }
                 }),
         );

@@ -54,6 +54,14 @@ pub struct State {
     /// (possible missing rescale).
     pub axis_changed_values_same: HashSet<usize>,
     pub computing_changes: bool,
+    pub show_rescale_only: bool,
+    pub hide_rescale_uniform: bool,
+    /// Subset of `axis_changed_values_same` where all data values are identical
+    /// (e.g. a table of all 1.0 — likely a placeholder, not a real rescale issue).
+    pub rescale_uniform: HashSet<usize>,
+
+    // Axis name filter — show only characteristics that reference this AXIS_PTS
+    pub axis_filter: Option<String>,
 
     // View options
     pub show_percent: bool,
@@ -94,6 +102,10 @@ impl Default for State {
             changed_set: HashSet::new(),
             axis_changed_values_same: HashSet::new(),
             computing_changes: false,
+            show_rescale_only: false,
+            hide_rescale_uniform: true,
+            rescale_uniform: HashSet::new(),
+            axis_filter: None,
             show_percent: false,
             split_x: 380.0,
             dragging_split: false,
@@ -111,6 +123,8 @@ impl State {
         let filt = self.filter.to_lowercase();
         let cat_filter: Option<&str> = self.selected_category.as_ref().map(|c| c.name.as_str());
 
+        let axis_filter = self.axis_filter.as_deref();
+
         let mut all: Vec<usize> = a2l
             .characteristics
             .iter()
@@ -126,6 +140,18 @@ impl State {
                 // Changed-only filter
                 if self.show_changed_only && !self.changed_set.is_empty()
                     && !self.changed_set.contains(i) { return false; }
+                // Rescale-only filter
+                if self.show_rescale_only && !self.axis_changed_values_same.is_empty() {
+                    if !self.axis_changed_values_same.contains(i) { return false; }
+                    if self.hide_rescale_uniform && self.rescale_uniform.contains(i) { return false; }
+                }
+                // Axis name filter
+                if let Some(axis_name) = axis_filter {
+                    let has_axis = c.axes.iter().any(|ax| {
+                        ax.axis_pts_ref.as_deref() == Some(axis_name)
+                    });
+                    if !has_axis { return false; }
+                }
                 // Text filter
                 filt.is_empty()
                     || c.name.to_lowercase().contains(&filt)
@@ -178,7 +204,6 @@ pub enum Msg {
     LoadBin2,
     Bin2Picked(Option<PathBuf>),
     Bin2Loaded(Result<Arc<Vec<u8>>, String>),
-    ModuleChanged(ModulePreset),
     CategoryChanged(Category),
     ClearCategory,
     FilterChanged(String),
@@ -191,7 +216,13 @@ pub enum Msg {
         changed: HashSet<usize>,
         /// Axis changed but data values identical — possible missing rescale.
         axis_changed_values_same: HashSet<usize>,
+        /// Subset of above where all data values are the same (e.g. all 1.0).
+        rescale_uniform: HashSet<usize>,
     },
+    ToggleRescaleOnly(bool),
+    ToggleHideUniform(bool),
+    FilterByAxis(String),
+    ClearAxisFilter,
     TogglePercent,
     SplitDragStart,
     SplitDragUpdate(f32),

@@ -6,7 +6,6 @@ use iced::{Alignment, Color, Element, Length, Theme};
 
 use mqb_a2l::CharacteristicType;
 
-use crate::data::MODULE_PRESETS;
 use crate::state::{Msg, State};
 use crate::theme::*;
 use crate::view_compare::view_compare;
@@ -103,15 +102,16 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
         col = col.push(text(e).size(11).color(error_color()));
     }
 
-    // Module selector
-    col = col.push(
-        row![
-            text("Module:").size(13),
-            pick_list(MODULE_PRESETS, Some(state.module), Msg::ModuleChanged).text_size(13),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center),
-    );
+    // Show detected module (if a BIN is loaded)
+    if state.binary.is_some() {
+        col = col.push(
+            container(text(format!("Module: {}", state.module)).size(12))
+                .style(|theme: &Theme| container::Style {
+                    text_color: Some(muted_text(theme)),
+                    ..Default::default()
+                })
+        );
+    }
 
     // ── Compare controls ────────────────────────────────────────────
     if state.binary2.is_some() {
@@ -139,18 +139,58 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
                 .align_y(Alignment::Center),
             );
             if !state.axis_changed_values_same.is_empty() {
+                let rescale_count = if state.hide_rescale_uniform {
+                    state.axis_changed_values_same.len() - state.rescale_uniform.len()
+                } else {
+                    state.axis_changed_values_same.len()
+                };
+                let rescale_label = format!("Rescale issues only ({rescale_count})");
                 col = col.push(
-                    container(
-                        text(format!("  !! {} possible rescale issues", state.axis_changed_values_same.len()))
-                            .size(11)
-                    )
-                    .style(|theme: &Theme| container::Style {
-                        text_color: Some(rescale_warning_color(theme)),
-                        ..Default::default()
-                    })
+                    row![
+                        checkbox(rescale_label, state.show_rescale_only)
+                            .on_toggle(Msg::ToggleRescaleOnly)
+                            .size(14)
+                            .text_size(13),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
                 );
+                if state.show_rescale_only && !state.rescale_uniform.is_empty() {
+                    let uniform_label = format!("Hide uniform ({} hidden)", state.rescale_uniform.len());
+                    col = col.push(
+                        container(
+                            row![
+                                checkbox(uniform_label, state.hide_rescale_uniform)
+                                    .on_toggle(Msg::ToggleHideUniform)
+                                    .size(14)
+                                    .text_size(12),
+                            ]
+                            .spacing(8)
+                            .align_y(Alignment::Center),
+                        )
+                        .padding(iced::Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 20.0 }),
+                    );
+                }
             }
         }
+    }
+
+    // Axis filter indicator
+    if let Some(axis_name) = &state.axis_filter {
+        col = col.push(
+            row![
+                container(
+                    text(format!("Axis: {axis_name}")).size(12).font(MONO)
+                )
+                .style(|theme: &Theme| container::Style {
+                    text_color: Some(tag_color_curve(theme)),
+                    ..Default::default()
+                }),
+                button(text("X").size(11)).on_press(Msg::ClearAxisFilter),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+        );
     }
 
     // Category selector
@@ -373,6 +413,37 @@ fn view_right_panel(state: &State) -> Element<'_, Msg> {
         ]
         .spacing(12),
     );
+
+    // Show axis references as clickable links
+    let axis_labels = ["X", "Y", "Z"];
+    for (ai, ax) in ch.axes.iter().enumerate() {
+        if let Some(ref pts_name) = ax.axis_pts_ref {
+            let ax_unit = a2l.compu_methods.get(&ax.compu_method_ref)
+                .map(|c| c.unit.as_str())
+                .unwrap_or("");
+            let label = axis_labels.get(ai).unwrap_or(&"?");
+            let axis_name = pts_name.clone();
+            col = col.push(
+                row![
+                    text(format!("{label}-axis:")).size(11),
+                    button(
+                        text(pts_name).size(11).font(MONO)
+                    )
+                    .on_press(Msg::FilterByAxis(axis_name))
+                    .padding([1, 6])
+                    .style(button::secondary),
+                    container(text(format!("({ax_unit})")).size(11))
+                        .style(|theme: &Theme| container::Style {
+                            text_color: Some(muted_text(theme)),
+                            ..Default::default()
+                        }),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            );
+        }
+    }
+
     col = col.push(horizontal_rule(1));
 
     // Values — single mode or compare mode

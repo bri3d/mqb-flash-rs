@@ -37,13 +37,38 @@ impl std::fmt::Display for ModulePreset {
     }
 }
 
-pub const MODULE_PRESETS: &[ModulePreset] = &[ModulePreset::Simos18, ModulePreset::Simos1810];
-
 pub fn address_map_for(preset: ModulePreset) -> AddressMap {
     match preset {
         ModulePreset::Simos18 => SIMOS18_MAP.to_vec(),
         ModulePreset::Simos1810 => SIMOS1810_MAP.to_vec(),
     }
+}
+
+/// (project_prefix, block_1_file_offset, version_offset_in_block, version_len)
+const MODULE_SIGNATURES: &[(&str, usize, usize, usize)] = &[
+    ("SC8", 0x01C000, 0x437, 8), // Simos18
+    ("SCG", 0x200000, 0x437, 8), // Simos18.10
+];
+
+/// Detect module preset from a full assembled BIN by reading the project prefix
+/// from the software version field in block 1 (CBOOT).
+pub fn detect_module_from_bin(data: &[u8]) -> Option<ModulePreset> {
+    for &(prefix, block1_off, ver_off, ver_len) in MODULE_SIGNATURES {
+        let start = block1_off + ver_off;
+        let end = start + ver_len;
+        if end <= data.len() {
+            if let Ok(version) = std::str::from_utf8(&data[start..end]) {
+                if version.starts_with(prefix) {
+                    return match prefix {
+                        "SC8" => Some(ModulePreset::Simos18),
+                        "SCG" => Some(ModulePreset::Simos1810),
+                        _ => None,
+                    };
+                }
+            }
+        }
+    }
+    None
 }
 
 /// A display-friendly category entry for the dropdown.

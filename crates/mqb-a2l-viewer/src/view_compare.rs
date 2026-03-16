@@ -7,7 +7,7 @@ use mqb_a2l::{A2lFile, Characteristic};
 use crate::state::Msg;
 use crate::theme::{diff_cell_colors, diff_pct_color, error_color, muted_text, rescale_warning_bg, rescale_warning_color, warning_color};
 use crate::view_single::{view_curve, view_values};
-use crate::widgets::{diff_map_table, format_pct, format_val, map_table, pct_diff};
+use crate::widgets::{diff_map_table_with_axis_diff, format_pct, format_val, map_table, map_table_with_axis_diff, pct_diff};
 use crate::MONO;
 
 pub fn view_compare<'a>(
@@ -392,28 +392,14 @@ fn view_compare_map<'a>(
     let cm = a2l.compu_methods.get(&ch.compu_method_ref);
     let val_unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
 
-    let axes_same = x1 == x2 && y1 == y2;
+    let x_same = x1 == x2;
+    let y_same = y1 == y2;
+    let size_same = x1.len() == x2.len() && y1.len() == y2.len();
 
     let mut col = column![].spacing(8);
 
-    if axes_same {
-        // Same axes — aligned diff view
-        col = col.push(text(format!("BIN 1 — {}x{} map (unit: {val_unit})", x1.len(), y1.len())).size(13));
-        col = col.push(map_table(x1, y1, z1, ch.lower_limit, ch.upper_limit));
-
-        let diff_label = if show_percent {
-            "BIN 2 — % change (red=increase, green=decrease)"
-        } else {
-            "BIN 2 — diff coloring (red=increase, green=decrease)"
-        };
-        col = col.push(text(diff_label).size(13));
-        col = col.push(diff_map_table(x1, y1, z1, z2, show_percent));
-    } else {
-        // Different axes — show both maps independently with axis change summary
-        let x_same = x1 == x2;
-        let y_same = y1 == y2;
-        let size_same = x1.len() == x2.len() && y1.len() == y2.len();
-
+    // Axis change notes (empty when axes match)
+    if !x_same || !y_same {
         let x_axis_name = ch.axes.first()
             .and_then(|ax| ax.axis_pts_ref.as_deref());
         let y_axis_name = ch.axes.get(1)
@@ -445,25 +431,25 @@ fn view_compare_map<'a>(
                     ..Default::default()
                 })
         );
+    }
 
-        // BIN 1 map with its own axes
-        col = col.push(text(format!("BIN 1 — {}x{} map (unit: {val_unit})", x1.len(), y1.len())).size(13));
-        col = col.push(map_table(x1, y1, z1, ch.lower_limit, ch.upper_limit));
+    // BIN 1 map
+    col = col.push(text(format!("BIN 1 — {}x{} map (unit: {val_unit})", x1.len(), y1.len())).size(13));
+    col = col.push(map_table(x1, y1, z1, ch.lower_limit, ch.upper_limit));
 
-        // BIN 2 map with its own axes
-        col = col.push(text(format!("BIN 2 — {}x{} map (unit: {val_unit})", x2.len(), y2.len())).size(13));
-        col = col.push(map_table(x2, y2, z2, ch.lower_limit, ch.upper_limit));
+    // BIN 2 — axis headers colored by diff from BIN 1 (neutral when axes match)
+    let diff_label = if show_percent {
+        "BIN 2 — % change (red=increase, green=decrease)"
+    } else {
+        "BIN 2 — diff coloring (red=increase, green=decrease)"
+    };
+    col = col.push(text(diff_label).size(13));
 
-        // If same grid size, also show a diff map aligned to BIN 2's axes
-        if size_same {
-            let diff_label = if show_percent {
-                "Difference — % change (BIN 2 axes, red=increase, green=decrease)"
-            } else {
-                "Difference (BIN 2 axes, red=increase, green=decrease)"
-            };
-            col = col.push(text(diff_label).size(13));
-            col = col.push(diff_map_table(x2, y2, z1, z2, show_percent));
-        }
+    if size_same {
+        col = col.push(diff_map_table_with_axis_diff(x1, y1, x2, y2, z1, z2, show_percent));
+    } else {
+        // Different grid sizes — can't do cell-level diff, show BIN 2 map with axis coloring
+        col = col.push(map_table_with_axis_diff(x1, y1, x2, y2, z2, ch.lower_limit, ch.upper_limit));
     }
 
     col = col.push(iced::widget::Space::new(0, 14));
