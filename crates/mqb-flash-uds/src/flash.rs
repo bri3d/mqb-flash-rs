@@ -30,8 +30,7 @@ use automotive::{TransportLayer, StreamExt};
 use mqb_modules::{BlockCrypto, FlashInfo, PreparedBlockData};
 use mqb_sa2::Sa2Vm;
 
-use crate::fake_adapter::FakeCanAdapter;
-use crate::interface::Interface;
+use mqb_transport::{FakeCanAdapter, Interface};
 
 #[cfg(feature = "j2534")]
 use automotive::j2534::J2534NativeIsoTpTransport;

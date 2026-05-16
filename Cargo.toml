@@ -10,6 +10,7 @@ members = [
     "crates/mqb-checksum",
     "crates/mqb-sa2",
     "crates/mqb-isotp",
+    "crates/mqb-transport",
     "crates/mqb-cboot",
     "crates/mqb-flash-uds",
     "crates/mqb-flash-cli",
@@ -35,6 +36,7 @@ mqb-binfile  = { path = "crates/mqb-binfile" }
 mqb-checksum = { path = "crates/mqb-checksum" }
 mqb-sa2      = { path = "crates/mqb-sa2" }
 mqb-isotp    = { path = "crates/mqb-isotp" }
+mqb-transport = { path = "crates/mqb-transport" }
 mqb-cboot    = { path = "crates/mqb-cboot" }
 mqb-flash-uds = { path = "crates/mqb-flash-uds" }
 mqb-a2l       = { path = "crates/mqb-a2l" }

@@ -1,0 +1,11 @@
+[package]
+name = "mqb-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "CAN/ISO-TP transport interface selection and fixture-driven fake adapter"
+
+[dependencies]
+automotive.workspace = true
+mqb-isotp.workspace = true
+tracing.workspace = true

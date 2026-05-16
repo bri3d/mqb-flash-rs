@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use mqb_flash_uds::flash::{flash_blocks, FlashOptions};
-use mqb_flash_uds::interface::Interface;
+use mqb_flash_uds::Interface;
 use mqb_modules::modules::simos1810::S1810_FLASH_INFO;
 use mqb_modules::PreparedBlockData;
 

@@ -2448,10 +2448,10 @@ dependencies = [
  "mqb-bytes",
  "mqb-cboot",
  "mqb-checksum",
- "mqb-isotp",
  "mqb-lzss",
  "mqb-modules",
  "mqb-sa2",
+ "mqb-transport",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -2516,6 +2516,15 @@ name = "mqb-sa2"
 version = "0.1.0"
 dependencies = [
  "mqb-bytes",
+]
+
+[[package]]
+name = "mqb-transport"
+version = "0.1.0"
+dependencies = [
+ "automotive",
+ "mqb-isotp",
+ "tracing",
 ]
 
 [[package]]

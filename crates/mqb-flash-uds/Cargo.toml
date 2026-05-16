@@ -12,11 +12,11 @@ socketcan = ["automotive/socketcan"]
 j2534 = ["automotive/j2534"]
 
 [dependencies]
+mqb-transport.workspace = true
 mqb-bytes.workspace = true
 mqb-lzss.workspace = true
 mqb-modules.workspace = true
 mqb-sa2.workspace = true
-mqb-isotp.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
