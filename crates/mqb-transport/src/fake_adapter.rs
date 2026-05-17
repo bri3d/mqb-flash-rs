@@ -31,8 +31,28 @@
 //! Any complete incoming `0x36` (TransferData) message automatically
 //! elicits a `76 <counter>` positive response **without** a fixture
 //! entry.  This avoids embedding large flash data blobs in fixtures.
+//!
+//! ## Ordered vs. interactive mode
+//!
+//! By default the adapter runs in **ordered** mode: the fixture is a
+//! script, and each incoming UDS PDU must match the next pending T-line in
+//! sequence.  This is exactly what a deterministic flash sequence needs.
+//!
+//! A fixture whose comment header contains the directive
+//!
+//! ```text
+//! # mode: interactive
+//! ```
+//!
+//! is instead loaded in **interactive** mode.  Here the T/R pairs become a
+//! request-keyed lookup table: any incoming request is answered with its
+//! mapped R-lines regardless of order, so a GUI can be clicked through
+//! non-deterministically.  Requests with no fixture entry are answered by
+//! generic per-service synthetic handlers (session control, tester
+//! present, clear-DTC, write, IO-control, routine start/stop), falling
+//! back to NRC `0x31` (requestOutOfRange) for anything still unknown.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 
 use automotive::can::{CanAdapter, Frame, Identifier};
@@ -54,6 +74,14 @@ enum Direction {
     Rx,
 }
 
+/// How the adapter resolves an incoming request into a response.
+enum Responder {
+    /// Sequential script — each request must match the next pending T-line.
+    Ordered(VecDeque<FixtureEntry>),
+    /// Request-keyed lookup — `request UDS bytes → list of response UDS PDUs`.
+    Interactive(HashMap<Vec<u8>, Vec<Vec<u8>>>),
+}
+
 // ── FakeCanAdapter ────────────────────────────────────────────────────────────
 
 /// A blocking [`CanAdapter`] that replays a `.can` fixture file.
@@ -61,7 +89,7 @@ enum Direction {
 /// Fixture entries use raw UDS PDU bytes; ISO-TP fragmentation and
 /// reassembly are handled internally.
 pub struct FakeCanAdapter {
-    fixture:        VecDeque<FixtureEntry>,
+    responder:      Responder,
     rx_queue:       VecDeque<Frame>,
     /// CAN ID used for ECU→tester frames we fabricate (FC, auto-responses).
     ecu_tx_id:      u32,
@@ -73,15 +101,21 @@ impl FakeCanAdapter {
     /// Build a new adapter from a `.can` fixture file.
     pub fn new(fixture_path: &Path) -> std::io::Result<Self> {
         let content = std::fs::read_to_string(fixture_path)?;
-        let entries = parse_fixture(&content);
+        let (interactive, entries) = parse_fixture(&content);
         let ecu_tx_id = entries
             .iter()
             .find(|e| e.direction == Direction::Rx)
             .map(|e| e.id)
             .unwrap_or(0x7E8);
 
+        let responder = if interactive {
+            Responder::Interactive(build_response_map(entries))
+        } else {
+            Responder::Ordered(VecDeque::from(entries))
+        };
+
         Ok(Self {
-            fixture: VecDeque::from(entries),
+            responder,
             rx_queue: VecDeque::new(),
             ecu_tx_id,
             isotp_pending: None,
@@ -98,7 +132,9 @@ impl FakeCanAdapter {
     /// Called when a complete incoming UDS PDU has been reassembled.
     ///
     /// * SID 0x36 (TransferData) → auto-respond with `76 <counter>`.
-    /// * Anything else → advance the fixture and enqueue R-frames.
+    /// * Ordered mode → advance the fixture and enqueue R-frames.
+    /// * Interactive mode → keyed lookup, then a synthetic per-service
+    ///   response, then NRC `0x31` for anything unknown.
     fn handle_complete_uds(&mut self, uds: &[u8]) {
         let sid = uds.first().copied().unwrap_or(0);
 
@@ -109,37 +145,136 @@ impl FakeCanAdapter {
             return;
         }
 
-        if let Some(expected) = self.fixture.front() {
-            if expected.direction == Direction::Tx && expected.uds == uds {
-                self.fixture.pop_front();
-                // Enqueue all immediately following R-entries.
-                loop {
-                    match self.fixture.front() {
-                        Some(e) if e.direction == Direction::Rx => {
-                            let entry = self.fixture.pop_front().expect("front was Some");
-                            self.enqueue_uds_response(&entry.uds);
+        // Resolve the response PDUs first so no borrow of `self.responder`
+        // is held across the `enqueue_uds_response` calls below.
+        let responses: Vec<Vec<u8>> = match &mut self.responder {
+            Responder::Ordered(fixture) => {
+                let mut out = Vec::new();
+                match fixture.front() {
+                    Some(expected)
+                        if expected.direction == Direction::Tx && expected.uds == uds =>
+                    {
+                        fixture.pop_front();
+                        // Drain all immediately-following R-entries.
+                        while matches!(fixture.front(), Some(e) if e.direction == Direction::Rx) {
+                            out.push(fixture.pop_front().expect("front was Some").uds);
                         }
-                        _ => break,
+                    }
+                    Some(expected) => {
+                        tracing::warn!(
+                            "FakeCanAdapter: unexpected UDS (got {:02X?}, expected {:02X?})",
+                            uds,
+                            expected.uds,
+                        );
+                    }
+                    None => {
+                        tracing::warn!(
+                            "FakeCanAdapter: fixture exhausted, no entry for {:02X?}",
+                            uds,
+                        );
                     }
                 }
-            } else {
-                tracing::warn!(
-                    "FakeCanAdapter: unexpected UDS (got {:02X?}, expected {:02X?})",
-                    uds,
-                    expected.uds,
-                );
+                out
+            }
+            Responder::Interactive(map) => match map.get(uds) {
+                Some(r) if !r.is_empty() => r.clone(),
+                _ => vec![synth_uds_response(uds)],
+            },
+        };
+
+        for r in responses {
+            self.enqueue_uds_response(&r);
+        }
+    }
+}
+
+/// Build the request-keyed response table for interactive mode.
+///
+/// Each `T` line opens a new request; every `R` line that follows it (until
+/// the next `T`) is one of that request's responses.
+fn build_response_map(entries: Vec<FixtureEntry>) -> HashMap<Vec<u8>, Vec<Vec<u8>>> {
+    let mut map: HashMap<Vec<u8>, Vec<Vec<u8>>> = HashMap::new();
+    let mut current: Option<Vec<u8>> = None;
+    for e in entries {
+        match e.direction {
+            Direction::Tx => {
+                map.insert(e.uds.clone(), Vec::new());
+                current = Some(e.uds);
+            }
+            Direction::Rx => {
+                if let Some(req) = current.as_ref() {
+                    if let Some(slot) = map.get_mut(req) {
+                        slot.push(e.uds);
+                    }
+                }
             }
         }
+    }
+    map
+}
+
+/// Synthesize a generic positive (or negative) response for a request that
+/// has no explicit fixture entry — used only in interactive mode.
+///
+/// These cover the services whose response is a fixed echo of the request
+/// (so a generator need not enumerate every possible payload): session
+/// control, tester present, clear-DTC, write, IO-control, and routine
+/// start/stop.  Everything else gets NRC `0x31` (requestOutOfRange).
+fn synth_uds_response(uds: &[u8]) -> Vec<u8> {
+    let sid = uds.first().copied().unwrap_or(0);
+    match sid {
+        // DiagnosticSessionControl → positive with standard P2/P2* timings.
+        0x10 => {
+            let sub = uds.get(1).copied().unwrap_or(0x01);
+            vec![0x50, sub, 0x00, 0x32, 0x01, 0xF4]
+        }
+        // TesterPresent → positive.
+        0x3E => {
+            let sub = uds.get(1).copied().unwrap_or(0x00);
+            vec![0x7E, sub]
+        }
+        // ClearDiagnosticInformation → positive.
+        0x14 => vec![0x54],
+        // WriteDataByIdentifier → echo the 2-byte DID.
+        0x2E if uds.len() >= 3 => vec![0x6E, uds[1], uds[2]],
+        // InputOutputControlByIdentifier → echo DID + controlParameter
+        // (+ controlState, which the GUI ignores but UDS allows).
+        0x2F if uds.len() >= 3 => {
+            let mut r = Vec::with_capacity(uds.len());
+            r.push(0x6F);
+            r.extend_from_slice(&uds[1..]);
+            r
+        }
+        // RoutineControl Start/Stop/RequestResults → echo subfunction + RID.
+        // (A RequestResults poll with a real status payload is normally
+        // supplied as an explicit fixture entry; this is the fallback.)
+        0x31 if uds.len() >= 4 => vec![0x71, uds[1], uds[2], uds[3]],
+        // Anything else: requestOutOfRange.
+        _ => vec![0x7F, sid, 0x31],
     }
 }
 
 // ── Fixture parser ────────────────────────────────────────────────────────────
 
-fn parse_fixture(content: &str) -> Vec<FixtureEntry> {
+/// Parse a fixture file into `(interactive, entries)`.
+///
+/// `interactive` is `true` when a comment line carries the
+/// `mode: interactive` directive (see the module docs).
+fn parse_fixture(content: &str) -> (bool, Vec<FixtureEntry>) {
     let mut entries = Vec::new();
+    let mut interactive = false;
     for raw_line in content.lines() {
         let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(comment) = line.strip_prefix('#') {
+            let directive = comment.trim();
+            if directive.eq_ignore_ascii_case("mode: interactive")
+                || directive.eq_ignore_ascii_case("@interactive")
+            {
+                interactive = true;
+            }
             continue;
         }
         let mut parts = line.splitn(3, ' ');
@@ -165,7 +300,7 @@ fn parse_fixture(content: &str) -> Vec<FixtureEntry> {
             entries.push(FixtureEntry { direction, id, uds });
         }
     }
-    entries
+    (interactive, entries)
 }
 
 // ── CanAdapter impl ───────────────────────────────────────────────────────────
@@ -267,5 +402,54 @@ impl CanAdapter for FakeCanAdapter {
             return Ok(vec![]);
         }
         Ok(self.rx_queue.drain(..).collect())
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordered_mode_is_the_default() {
+        let (interactive, entries) = parse_fixture("T 7E0 10 03\nR 7E8 50 03\n");
+        assert!(!interactive);
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn directive_selects_interactive_mode() {
+        let (interactive, _) = parse_fixture("# mode: interactive\nT 7E0 22 f1 90\n");
+        assert!(interactive);
+    }
+
+    #[test]
+    fn response_map_groups_replies_by_request() {
+        let (_, entries) = parse_fixture(
+            "# mode: interactive\n\
+             T 7E0 22 f1 90\n\
+             R 7E8 62 f1 90 41\n\
+             T 7E0 22 f1 9e\n\
+             R 7E8 62 f1 9e 42\n",
+        );
+        let map = build_response_map(entries);
+        assert_eq!(map.get(&vec![0x22, 0xF1, 0x90]).unwrap(), &[vec![0x62, 0xF1, 0x90, 0x41]]);
+        assert_eq!(map.get(&vec![0x22, 0xF1, 0x9E]).unwrap(), &[vec![0x62, 0xF1, 0x9E, 0x42]]);
+    }
+
+    #[test]
+    fn synth_covers_generic_services() {
+        assert_eq!(synth_uds_response(&[0x10, 0x03]), vec![0x50, 0x03, 0x00, 0x32, 0x01, 0xF4]);
+        assert_eq!(synth_uds_response(&[0x3E, 0x00]), vec![0x7E, 0x00]);
+        assert_eq!(synth_uds_response(&[0x14, 0xFF, 0xFF, 0xFF]), vec![0x54]);
+        assert_eq!(synth_uds_response(&[0x2E, 0x12, 0x34, 0xAA]), vec![0x6E, 0x12, 0x34]);
+        assert_eq!(
+            synth_uds_response(&[0x2F, 0x12, 0x34, 0x03, 0x01]),
+            vec![0x6F, 0x12, 0x34, 0x03, 0x01],
+        );
+        assert_eq!(synth_uds_response(&[0x31, 0x01, 0x02, 0x03]), vec![0x71, 0x01, 0x02, 0x03]);
+        // Unknown read → requestOutOfRange.
+        assert_eq!(synth_uds_response(&[0x22, 0xAB, 0xCD]), vec![0x7F, 0x22, 0x31]);
     }
 }
