@@ -23,7 +23,8 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+# iced 0.14 → wgpu 27 requires Rust 1.88+
+rust-version = "1.88"
 
 [workspace.dependencies]
 # Internal
@@ -43,20 +44,20 @@ mqb-a2l       = { path = "crates/mqb-a2l" }
 
 # External
 automotive  = { version = "0.4", default-features = false, features = ["panda"] }
-zip         = "2"
-aes         = "0.8"
-cbc         = { version = "0.1", features = ["alloc"] }
-cipher      = "0.4"
-roxmltree   = "0.19"
+zip         = "8"
+aes         = "0.9"
+cbc         = { version = "0.2", features = ["alloc"] }
+cipher      = "0.5"
+roxmltree   = "0.21"
 hex         = "0.4"
 crc32fast   = "1"
 tokio       = { version = "1", features = ["full"] }
-thiserror   = "1"
+thiserror   = "2"
 anyhow      = "1"
 clap        = { version = "4", features = ["derive"] }
-indicatif   = "0.17"
+indicatif   = "0.18"
 tracing     = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-iced        = { version = "0.13", features = ["tokio"] }
-rfd         = "0.15"
+iced        = { version = "0.14", features = ["tokio"] }
+rfd         = "0.17"
 

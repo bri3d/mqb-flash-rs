@@ -1,4 +1,5 @@
-use iced::widget::{column, container, horizontal_rule, row, scrollable, text};
+use iced::widget::rule::horizontal as horizontal_rule;
+use iced::widget::{column, container, row, scrollable, text};
 use iced::{Alignment, Element, Theme};
 
 use mqb_a2l::reader::CharacteristicValues;
@@ -452,7 +453,7 @@ fn view_compare_map<'a>(
         col = col.push(map_table_with_axis_diff(x1, y1, x2, y2, z2, ch.lower_limit, ch.upper_limit));
     }
 
-    col = col.push(iced::widget::Space::new(0, 14));
+    col = col.push(iced::widget::Space::new().width(0).height(14));
 
     scrollable(col).direction(scrollable::Direction::Both {
         vertical: scrollable::Scrollbar::new(),

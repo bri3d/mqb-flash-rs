@@ -2,7 +2,7 @@
 
 use aes::Aes128;
 use cbc::{Decryptor, Encryptor};
-use cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use cipher::{block_padding::NoPadding, BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 
 use super::BlockCrypto;
 
@@ -29,7 +29,7 @@ impl BlockCrypto for AesCrypto {
             .expect("valid key/iv length");
         let out_len = buf.len();
         let encrypted = enc
-            .encrypt_padded_mut::<NoPadding>(&mut buf, out_len)
+            .encrypt_padded::<NoPadding>(&mut buf, out_len)
             .expect("encryption failed");
         encrypted.to_vec()
     }
@@ -39,7 +39,7 @@ impl BlockCrypto for AesCrypto {
         let dec = Decryptor::<Aes128>::new_from_slices(&self.key, &self.iv)
             .expect("valid key/iv length");
         let decrypted = dec
-            .decrypt_padded_mut::<NoPadding>(&mut buf)
+            .decrypt_padded::<NoPadding>(&mut buf)
             .expect("decryption failed");
         decrypted.to_vec()
     }

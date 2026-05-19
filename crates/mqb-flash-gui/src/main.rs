@@ -1,12 +1,13 @@
-//! mqb-flash-gui — iced 0.13 GUI for VW ECU flashing.
+//! mqb-flash-gui — iced 0.14 GUI for VW ECU flashing.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use iced::widget::rule::horizontal as horizontal_rule;
 use iced::widget::{
-    button, column, container, horizontal_rule, pick_list, progress_bar, radio, row,
+    button, column, container, pick_list, progress_bar, radio, row,
     scrollable, text, text_input,
 };
 use iced::{Alignment, Element, Length, Subscription, Task};
@@ -32,7 +33,8 @@ fn main() -> iced::Result {
                 .add_directive("naga=warn".parse().unwrap()),
         )
         .init();
-    iced::application("MQB Flash", update, view)
+    iced::application(State::default, update, view)
+        .title("MQB Flash")
         .subscription(subscription)
         .window_size((820.0_f32, 720.0_f32))
         .run()
@@ -191,6 +193,14 @@ struct FlashOp {
     flash_info: &'static FlashInfo,
     blocks: Arc<Vec<PreparedBlockData>>,
     opts: FlashOptions,
+}
+
+// The `id` alone determines subscription identity: a new flash op gets a new
+// counter value, which `Subscription::run_with` hashes to spawn a fresh stream.
+impl std::hash::Hash for FlashOp {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
 }
 
 // ─── Messages ────────────────────────────────────────────────────────────────
@@ -770,49 +780,51 @@ fn subscription(state: &State) -> Subscription<Message> {
     let Some(op) = &state.flash_op else {
         return Subscription::none();
     };
+    // iced 0.14: `run_with` takes hashable data + a non-capturing `fn` builder.
+    Subscription::run_with(op.clone(), flash_stream)
+}
 
+/// Builds the progress stream for an active flash operation. Must be a plain
+/// `fn` (no captures) so it can be passed to `Subscription::run_with`.
+fn flash_stream(op: &FlashOp) -> impl iced::futures::Stream<Item = Message> {
     let flash_info = op.flash_info;
     let blocks_arc = Arc::clone(&op.blocks);
     let mut opts = op.opts.clone();
-    let id = op.id;
 
-    Subscription::run_with_id(
-        id,
-        iced::stream::channel(64, move |mut output| async move {
-            use iced::futures::SinkExt;
+    iced::stream::channel::<Message>(64, move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+        use iced::futures::SinkExt;
 
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ProgressUpdate>();
-            opts.progress_tx = Some(tx.clone());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ProgressUpdate>();
+        opts.progress_tx = Some(tx.clone());
 
-            let blocks_vec: Vec<PreparedBlockData> = (*blocks_arc).clone();
+        let blocks_vec: Vec<PreparedBlockData> = (*blocks_arc).clone();
 
-            tokio::spawn(async move {
-                let result = flash_blocks(flash_info, blocks_vec, opts).await;
-                match result {
-                    Ok(()) => {
-                        let _ = tx.send(ProgressUpdate::Complete);
-                    }
-                    Err(e) => {
-                        let _ = tx.send(ProgressUpdate::Error(e.to_string()));
-                    }
+        tokio::spawn(async move {
+            let result = flash_blocks(flash_info, blocks_vec, opts).await;
+            match result {
+                Ok(()) => {
+                    let _ = tx.send(ProgressUpdate::Complete);
                 }
-            });
-
-            while let Some(update) = rx.recv().await {
-                let is_done = matches!(
-                    update,
-                    ProgressUpdate::Complete | ProgressUpdate::Error(_)
-                );
-                let _ = output.send(Message::FlashProgress(update)).await;
-                if is_done {
-                    break;
+                Err(e) => {
+                    let _ = tx.send(ProgressUpdate::Error(e.to_string()));
                 }
             }
+        });
 
-            // Keep the future alive until iced drops this subscription.
-            std::future::pending::<()>().await
-        }),
-    )
+        while let Some(update) = rx.recv().await {
+            let is_done = matches!(
+                update,
+                ProgressUpdate::Complete | ProgressUpdate::Error(_)
+            );
+            let _ = output.send(Message::FlashProgress(update)).await;
+            if is_done {
+                break;
+            }
+        }
+
+        // Keep the future alive until iced drops this subscription.
+        std::future::pending::<()>().await
+    })
 }
 
 // ─── View ─────────────────────────────────────────────────────────────────────
@@ -995,7 +1007,7 @@ fn view(state: &State) -> Element<'_, Message> {
         column![
             status_line,
             progress_label,
-            progress_bar(0.0..=1.0, state.progress).width(Length::Fill),
+            progress_bar(0.0..=1.0, state.progress).length(Length::Fill),
             log_view,
             button("Clear Log")
                 .on_press(Message::ClearLog)

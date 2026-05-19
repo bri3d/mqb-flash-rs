@@ -7,9 +7,10 @@ use std::sync::Arc;
 
 use iced::event::{self, Event};
 use iced::mouse;
+use iced::widget::rule::{horizontal as horizontal_rule, vertical as vertical_rule};
 use iced::widget::{
-    button, checkbox, column, container, horizontal_rule, mouse_area, row, scrollable, text,
-    text_input, vertical_rule,
+    button, checkbox, column, container, mouse_area, row, scrollable, text,
+    text_input,
 };
 use iced::{Alignment, Color, Element, Length, Subscription, Task, keyboard};
 
@@ -17,15 +18,24 @@ use mqb_a2l::{A2lFile, Conversion, DataType};
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
-use iced::widget::text_input as ti;
-const FILTER_INPUT_ID: fn() -> ti::Id = || ti::Id::new("filter");
-const EDIT_INPUT_ID: fn() -> ti::Id = || ti::Id::new("edit_field");
+const FILTER_INPUT_ID: &str = "filter";
+const EDIT_INPUT_ID: &str = "edit_field";
 
 fn main() -> iced::Result {
-    iced::application("MQB Logger", update, view)
-        .subscription(subscription)
-        .window_size((1300.0_f32, 820.0_f32))
-        .run_with(|| (State::default(), ti::focus(FILTER_INPUT_ID())))
+    iced::application(
+        || {
+            (
+                State::default(),
+                iced::widget::operation::focus(FILTER_INPUT_ID),
+            )
+        },
+        update,
+        view,
+    )
+    .title("MQB Logger")
+    .subscription(subscription)
+    .window_size((1300.0_f32, 820.0_f32))
+    .run()
 }
 
 // ─── CSV item ────────────────────────────────────────────────────────────────
@@ -400,7 +410,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     .unwrap_or_default(),
             };
             state.editing = Some((target, draft));
-            ti::focus(EDIT_INPUT_ID())
+            iced::widget::operation::focus(EDIT_INPUT_ID)
         }
 
         Message::EditDraftChanged(s) => {
@@ -434,8 +444,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         // ── Keyboard nav ─────────────────────────────────────────────────
-        Message::TabForward => iced::widget::focus_next(),
-        Message::TabBackward => iced::widget::focus_previous(),
+        Message::TabForward => iced::widget::operation::focus_next(),
+        Message::TabBackward => iced::widget::operation::focus_previous(),
 
         // ── Split pane ──────────────────────────────────────────────────
         Message::SplitDragStart => {
@@ -457,13 +467,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 // ─── Subscription ─────────────────────────────────────────────────────────────
 
 fn subscription(state: &State) -> Subscription<Message> {
-    let keys = keyboard::on_key_press(|key, modifiers| match key {
-        keyboard::Key::Named(keyboard::key::Named::Tab) => Some(if modifiers.shift() {
-            Message::TabBackward
-        } else {
-            Message::TabForward
-        }),
-        keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::CancelEdit),
+    let keys = keyboard::listen().filter_map(|event| match event {
+        keyboard::Event::KeyPressed { key, modifiers, .. } => match key {
+            keyboard::Key::Named(keyboard::key::Named::Tab) => Some(if modifiers.shift() {
+                Message::TabBackward
+            } else {
+                Message::TabForward
+            }),
+            keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::CancelEdit),
+            _ => None,
+        },
         _ => None,
     });
     if state.dragging_split {
@@ -566,7 +579,7 @@ fn view(state: &State) -> Element<'_, Message> {
 
     let filter_row = row![
         text_input("Filter by name or description…", &state.filter)
-            .id(FILTER_INPUT_ID())
+            .id(FILTER_INPUT_ID)
             .on_input(Message::FilterChanged)
             .width(Length::Fill),
         text(showing_str).size(12),
@@ -705,7 +718,7 @@ fn measurement_row<'a>(
     .spacing(1)
     .width(Length::Fill);
 
-    let row_content = row![checkbox("", is_selected), label_col,]
+    let row_content = row![checkbox(is_selected), label_col,]
         .spacing(8)
         .align_y(Alignment::Center)
         .padding([5, 8]);
@@ -768,7 +781,7 @@ fn csv_item_row<'a>(
 
     let name_widget: Element<'_, Message> = if let Some(draft) = editing_name {
         text_input("", draft)
-            .id(EDIT_INPUT_ID())
+            .id(EDIT_INPUT_ID)
             .on_input(Message::EditDraftChanged)
             .on_submit(Message::CommitEdit)
             .size(13)
@@ -812,7 +825,7 @@ fn csv_item_row<'a>(
     let eq_str: &str = if item.equation.is_empty() { "x" } else { &item.equation };
     let line3_widget: Element<'_, Message> = if let Some(draft) = editing_equation {
         text_input("", draft)
-            .id(EDIT_INPUT_ID())
+            .id(EDIT_INPUT_ID)
             .on_input(Message::EditDraftChanged)
             .on_submit(Message::CommitEdit)
             .size(10)

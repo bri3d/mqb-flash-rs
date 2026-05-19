@@ -1,4 +1,5 @@
-use iced::widget::{column, container, horizontal_rule, row, text};
+use iced::widget::rule::horizontal as horizontal_rule;
+use iced::widget::{column, container, row, text};
 use iced::Theme;
 
 use crate::state::Msg;

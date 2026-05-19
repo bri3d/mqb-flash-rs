@@ -1,6 +1,7 @@
+use iced::widget::rule::{horizontal as horizontal_rule, vertical as vertical_rule};
 use iced::widget::{
-    button, checkbox, column, container, horizontal_rule, mouse_area, pick_list, row, scrollable,
-    text, text_input, vertical_rule,
+    button, checkbox, column, container, mouse_area, pick_list, row, scrollable,
+    text, text_input,
 };
 use iced::{Alignment, Color, Element, Length, Theme};
 
@@ -117,7 +118,7 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
     if state.binary2.is_some() {
         col = col.push(
             row![
-                checkbox("Compare", state.compare_mode).on_toggle(Msg::ToggleCompare).size(14).text_size(13),
+                checkbox(state.compare_mode).label("Compare").on_toggle(Msg::ToggleCompare).size(14).text_size(13),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -130,7 +131,8 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
             };
             col = col.push(
                 row![
-                    checkbox(changed_label, state.show_changed_only)
+                    checkbox(state.show_changed_only)
+                        .label(changed_label)
                         .on_toggle(Msg::ToggleChangedOnly)
                         .size(14)
                         .text_size(13),
@@ -147,7 +149,8 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
                 let rescale_label = format!("Rescale issues only ({rescale_count})");
                 col = col.push(
                     row![
-                        checkbox(rescale_label, state.show_rescale_only)
+                        checkbox(state.show_rescale_only)
+                            .label(rescale_label)
                             .on_toggle(Msg::ToggleRescaleOnly)
                             .size(14)
                             .text_size(13),
@@ -160,7 +163,8 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
                     col = col.push(
                         container(
                             row![
-                                checkbox(uniform_label, state.hide_rescale_uniform)
+                                checkbox(state.hide_rescale_uniform)
+                                    .label(uniform_label)
                                     .on_toggle(Msg::ToggleHideUniform)
                                     .size(14)
                                     .text_size(12),
@@ -231,7 +235,7 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
     col = col.push(
         text_input("Search characteristics...", &state.filter)
             .on_input(Msg::FilterChanged)
-            .id(FILTER_ID())
+            .id(FILTER_ID)
             .size(13),
     );
 
@@ -353,7 +357,7 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
         }
         col = col.push(
             scrollable(list_col)
-                .id(crate::CHAR_LIST_ID())
+                .id(crate::CHAR_LIST_ID)
                 .height(Length::Fill),
         );
     }

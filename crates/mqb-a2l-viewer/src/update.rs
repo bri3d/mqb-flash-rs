@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use iced::event::{self, Event};
 use iced::mouse;
-use iced::widget::scrollable::{self, RelativeOffset};
+use iced::widget::scrollable::RelativeOffset;
 use iced::{keyboard, Subscription, Task};
 
 use mqb_a2l::reader::{CharacteristicValues, make_resolver, read_characteristic};
@@ -13,13 +13,14 @@ use crate::data::{address_map_for, build_categories, detect_module_from_bin};
 use crate::state::{Msg, State};
 
 pub fn subscription(state: &State) -> Subscription<Msg> {
-    let keys = keyboard::on_key_press(|key, _modifiers| {
-        match key {
+    let keys = keyboard::listen().filter_map(|event| match event {
+        keyboard::Event::KeyPressed { key, .. } => match key {
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Msg::SelectNext),
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Msg::SelectPrev),
             keyboard::Key::Character(c) if c.as_str() == "p" || c.as_str() == "P" => Some(Msg::TogglePercent),
             _ => None,
-        }
+        },
+        _ => None,
     });
     if state.dragging_split {
         let drag = event::listen_with(|event, _status, _window| match event {
@@ -253,7 +254,7 @@ fn scroll_to_selected(state: &State) -> Task<Msg> {
     let Some(pos) = state.filtered.iter().position(|&i| i == sel) else { return Task::none() };
     let len = state.filtered.len();
     let y = if len <= 1 { 0.0 } else { pos as f32 / (len - 1) as f32 };
-    scrollable::snap_to(crate::CHAR_LIST_ID(), RelativeOffset { x: 0.0, y })
+    iced::widget::operation::snap_to(crate::CHAR_LIST_ID, RelativeOffset { x: 0.0, y })
 }
 
 /// Kick off background computation of changed characteristic indices.

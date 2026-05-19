@@ -1,4 +1,5 @@
-use iced::widget::{column, container, horizontal_rule, row, scrollable, text};
+use iced::widget::rule::horizontal as horizontal_rule;
+use iced::widget::{column, container, row, scrollable, text};
 use iced::{Element, Length, Theme};
 
 use mqb_a2l::reader::CharacteristicValues;
@@ -97,7 +98,7 @@ pub fn view_map<'a>(
     let mut col = column![].spacing(0);
     col = col.push(text(format!("{}x{} map (unit: {val_unit})", x.len(), y.len())).size(12));
     col = col.push(map_table(x, y, z, ch.lower_limit, ch.upper_limit));
-    col = col.push(iced::widget::Space::new(0, 14));
+    col = col.push(iced::widget::Space::new().width(0).height(14));
 
     scrollable(col).direction(scrollable::Direction::Both {
         vertical: scrollable::Scrollbar::new(),
@@ -148,7 +149,7 @@ pub fn view_cuboid<'a>(
         col = col.push(map_table(x, y, slice, ch.lower_limit, ch.upper_limit));
     }
 
-    col = col.push(iced::widget::Space::new(0, 14));
+    col = col.push(iced::widget::Space::new().width(0).height(14));
 
     scrollable(col).direction(scrollable::Direction::Both {
         vertical: scrollable::Scrollbar::new(),
