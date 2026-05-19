@@ -49,8 +49,9 @@
 //! mapped R-lines regardless of order, so a GUI can be clicked through
 //! non-deterministically.  Requests with no fixture entry are answered by
 //! generic per-service synthetic handlers (session control, tester
-//! present, clear-DTC, write, IO-control, routine start/stop), falling
-//! back to NRC `0x31` (requestOutOfRange) for anything still unknown.
+//! present, clear-DTC, write, IO-control, routine start/stop, security
+//! access), falling back to NRC `0x31` (requestOutOfRange) for anything
+//! still unknown.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
@@ -219,7 +220,9 @@ fn build_response_map(entries: Vec<FixtureEntry>) -> HashMap<Vec<u8>, Vec<Vec<u8
 /// These cover the services whose response is a fixed echo of the request
 /// (so a generator need not enumerate every possible payload): session
 /// control, tester present, clear-DTC, write, IO-control, and routine
-/// start/stop.  Everything else gets NRC `0x31` (requestOutOfRange).
+/// start/stop.  SecurityAccess is also handled — requestSeed returns a
+/// fixed seed and sendKey is always accepted.  Everything else gets NRC
+/// `0x31` (requestOutOfRange).
 fn synth_uds_response(uds: &[u8]) -> Vec<u8> {
     let sid = uds.first().copied().unwrap_or(0);
     match sid {
@@ -249,6 +252,19 @@ fn synth_uds_response(uds: &[u8]) -> Vec<u8> {
         // (A RequestResults poll with a real status payload is normally
         // supplied as an explicit fixture entry; this is the fallback.)
         0x31 if uds.len() >= 4 => vec![0x71, uds[1], uds[2], uds[3]],
+        // SecurityAccess.  A requestSeed (odd subfunction) returns a fixed
+        // non-zero 4-byte seed; a sendKey (even subfunction) is always
+        // accepted.  The fake adapter can't validate a real key, so any
+        // login the tester computes succeeds — enough to click through the
+        // login path offline.
+        0x27 if uds.len() >= 2 => {
+            let sub = uds[1];
+            if sub % 2 == 1 {
+                vec![0x67, sub, 0x01, 0x02, 0x03, 0x04]
+            } else {
+                vec![0x67, sub]
+            }
+        }
         // Anything else: requestOutOfRange.
         _ => vec![0x7F, sid, 0x31],
     }
@@ -449,6 +465,12 @@ mod tests {
             vec![0x6F, 0x12, 0x34, 0x03, 0x01],
         );
         assert_eq!(synth_uds_response(&[0x31, 0x01, 0x02, 0x03]), vec![0x71, 0x01, 0x02, 0x03]);
+        // SecurityAccess: requestSeed (odd) → seed; sendKey (even) → accepted.
+        assert_eq!(synth_uds_response(&[0x27, 0x03]), vec![0x67, 0x03, 0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(
+            synth_uds_response(&[0x27, 0x04, 0xDE, 0xAD, 0xBE, 0xEF]),
+            vec![0x67, 0x04],
+        );
         // Unknown read → requestOutOfRange.
         assert_eq!(synth_uds_response(&[0x22, 0xAB, 0xCD]), vec![0x7F, 0x22, 0x31]);
     }
