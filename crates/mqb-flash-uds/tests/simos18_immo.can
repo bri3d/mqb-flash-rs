@@ -1,0 +1,62 @@
+# A Simos18 ECU's immobilizer, as it answers on the diagnostic channel.
+#
+# mode: interactive
+#
+# Request-keyed rather than ordered, because the immobilizer tool reads these
+# DIDs on a timer and in whatever order the user's clicks produce.
+#
+# The ECU modelled here is healthy and adapted: ignition on, released, idxTun
+# 0x6A present in the allow-list. The values are the documented layouts from
+# IMMO.md section 7.4.
+#
+# T 7E0 = tester -> ECU  |  R 7E8 = ECU -> tester
+
+# Imo service 1 — challenge (4 bytes). Latched until consumed or ignition cycles.
+T 7E0 22 02 e0
+R 7E8 62 02 e0 11 22 33 44
+
+# Imo service 3 — adaptation status (10 bytes).
+#   [0] stStatFct = 2 (adapted)
+#   [1] ctDatBasFazit = 1
+#   [2] idxLab = 0x0D  -> master key b3fe9296
+#   [8] 0x00, so bLimModEna is clear
+T 7E0 22 02 ed
+R 7E8 62 02 ed 02 01 0d 00 00 00 00 00 00 00
+
+# Imo service 4 — live state (10 bytes). 0x04 / 0xFC is the fully healthy,
+# released reading: ignition on, stStatFct != 3 and == 2, master replied,
+# CrcMaster and PIN both accepted, memory access NOT inhibited.
+T 7E0 22 02 ee
+R 7E8 62 02 ee 04 fc 00 00 00 00 00 00 00 00
+
+# Imo service 5 — lockout timers (6 bytes). Both clear.
+T 7E0 22 02 ef
+R 7E8 62 02 ef 00 00 00 00 00 00
+
+# Imo service 9 — VIN (17 bytes).
+T 7E0 22 f1 90
+R 7E8 62 f1 90 33 56 57 34 54 37 41 55 36 47 4d 30 34 31 33 36 37
+
+# Imo service 11 — FAZIT production string (23 bytes).
+T 7E0 22 f1 7c
+R 7E8 62 f1 7c 46 46 46 46 46 46 46 46 46 46 46 46 46 46 46 46 46 46 46 46 46 46 46
+
+# Imo service 7 — signed identity checksum (5 bytes).
+#
+# Computed with mqb_immo::diag::identity_checksum over the FAZIT, VIN, the
+# service 3 and 4 payloads and the challenge above, keyed with the noKeySecu of
+# the reference record in NVCRYPT.md. The test recomputes it and compares, so a
+# change to the derivation shows up here rather than silently passing.
+T 7E0 22 02 f9
+R 7E8 62 02 f9 82 b8 af 59 0f
+
+# Imo service 8 — snapshot (19 bytes).
+#   [0]      'S' — a production ECU, not a hardware sample
+#   [7]      ctAuthLos = 0
+#   [8]      ctWrAccNvm = 3
+#   [9]      idxTun = 0x6A
+#   [10..15] strVarTun — the power-class allow-list; 0x6A is a member
+#   [15..18] Imo component version 8.2.0
+#   [18]     last error = none
+T 7E0 22 02 ff
+R 7E8 62 02 ff 53 00 00 00 00 00 00 00 03 6a 6a 00 00 00 00 08 02 00 00

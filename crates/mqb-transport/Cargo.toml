@@ -9,3 +9,10 @@ description = "CAN/ISO-TP transport interface selection and fixture-driven fake 
 automotive.workspace = true
 mqb-isotp.workspace = true
 tracing.workspace = true
+thiserror.workspace = true
+
+[features]
+# Enable SocketCAN support (Linux only)
+socketcan = ["automotive/socketcan"]
+# Enable SAE J2534 PassThru support (Windows)
+j2534 = ["automotive/j2534"]

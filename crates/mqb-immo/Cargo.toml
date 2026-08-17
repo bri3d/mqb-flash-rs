@@ -1,0 +1,14 @@
+[package]
+name = "mqb-immo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Simos18 immobilizer: status decoding, authentication protocol, master emulation, and the ImoComDiag services"
+
+[dependencies]
+mqb-nvcrypt.workspace = true
+mqb-modules.workspace = true
+aes.workspace = true
+crc32fast.workspace = true
+rand.workspace = true
+thiserror.workspace = true

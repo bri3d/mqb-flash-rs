@@ -21,7 +21,6 @@
 use std::collections::HashMap;
 use thiserror::Error;
 
-use automotive::can::bitrate::BitrateBuilder;
 use automotive::can::{AsyncCanAdapter, Identifier};
 use automotive::isotp::{IsoTPAdapter, IsoTPConfig};
 use automotive::uds::{RoutineControlType, UDSClient};
@@ -30,10 +29,9 @@ use automotive::{StreamExt, TransportLayer};
 use mqb_modules::{FlashInfo, PreparedBlockData};
 use mqb_sa2::Sa2Vm;
 
-use mqb_transport::{FakeCanAdapter, Interface};
+use mqb_transport::Interface;
 
-#[cfg(feature = "j2534")]
-use automotive::j2534::J2534NativeIsoTpTransport;
+use crate::session::Session;
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
@@ -198,6 +196,9 @@ impl HighResTimerGuard {
 /// Blocks are flashed in the order provided by the caller — no internal
 /// reordering is performed.  For normal flashing, sort by block number.
 /// For unlock, provide blocks in unlock order: [1, 2, 3, 4, patch, 5].
+/// Opens a connection, flashes, and closes it. Callers doing several
+/// operations should open a [`Session`] once and call
+/// [`Session::flash_blocks`] instead of reopening the device each time.
 pub async fn flash_blocks(
     flash_info: &FlashInfo,
     blocks: Vec<PreparedBlockData>,
@@ -214,185 +215,10 @@ pub async fn flash_blocks(
         "Starting flash sequence"
     );
 
-    match &opts.interface {
-        Interface::Fake(fixture_path) => {
-            let fake = FakeCanAdapter::new(fixture_path.as_path())
-                .map_err(|e| FlashError::Interface(format!("Fixture load error: {e}")))?;
-            let adapter = AsyncCanAdapter::new(fake);
-            run_with_adapter(&adapter, flash_info, &blocks, &opts).await
-        }
-        Interface::SocketCan(iface) => flash_via_socketcan(iface, flash_info, &blocks, &opts).await,
-        Interface::Panda => flash_via_panda(flash_info, &blocks, &opts).await,
-        Interface::J2534 {
-            dll,
-            bitrate,
-            native_isotp,
-        } => {
-            flash_via_j2534(
-                dll.as_deref(),
-                *bitrate,
-                *native_isotp,
-                flash_info,
-                &blocks,
-                &opts,
-            )
-            .await
-        }
-    }
-}
-
-// ── SocketCAN dispatch ────────────────────────────────────────────────────────
-
-#[cfg(all(target_os = "linux", feature = "socketcan"))]
-async fn flash_via_socketcan(
-    iface: &str,
-    flash_info: &FlashInfo,
-    blocks: &[PreparedBlockData],
-    opts: &FlashOptions,
-) -> Result<(), FlashError> {
-    let sc = automotive::socketcan::SocketCanAdapter::open(iface)
-        .map_err(|e| FlashError::Interface(format!("SocketCAN open error: {e}")))?;
-    let adapter = AsyncCanAdapter::new(sc);
-    run_with_adapter(&adapter, flash_info, blocks, opts).await
-}
-
-#[cfg(not(all(target_os = "linux", feature = "socketcan")))]
-async fn flash_via_socketcan(
-    _iface: &str,
-    _flash_info: &FlashInfo,
-    _blocks: &[PreparedBlockData],
-    _opts: &FlashOptions,
-) -> Result<(), FlashError> {
-    Err(FlashError::Interface(
-        "SocketCAN support is not enabled. \
-         Recompile with `--features mqb-flash-uds/socketcan` on Linux."
-            .into(),
-    ))
-}
-
-// ── Panda dispatch ────────────────────────────────────────────────────────────
-
-async fn flash_via_panda(
-    flash_info: &FlashInfo,
-    blocks: &[PreparedBlockData],
-    opts: &FlashOptions,
-) -> Result<(), FlashError> {
-    let bitrate_cfg = BitrateBuilder::new::<automotive::panda::Panda>()
-        .bitrate(500_000)
-        .build()
-        .map_err(|e| FlashError::Interface(format!("Panda bitrate config error: {e}")))?;
-    let panda = automotive::panda::Panda::new(bitrate_cfg)
-        .map_err(|e| FlashError::Interface(format!("Panda open error: {e}")))?;
-    let adapter = AsyncCanAdapter::new(panda);
-    run_with_adapter(&adapter, flash_info, blocks, opts).await
-}
-
-// ── J2534 dispatch ────────────────────────────────────────────────────────────
-
-#[cfg(feature = "j2534")]
-fn j2534_bitrate_config(
-    bitrate: u32,
-) -> Result<automotive::can::bitrate::BitrateConfig, FlashError> {
-    BitrateBuilder::new::<automotive::j2534::J2534CanAdapter>()
-        .bitrate(bitrate)
-        .build()
-        .map_err(|e| FlashError::Interface(format!("J2534 bitrate config error: {e}")))
-}
-
-#[cfg(feature = "j2534")]
-async fn flash_via_j2534(
-    dll: Option<&str>,
-    bitrate: u32,
-    native_isotp: bool,
-    flash_info: &FlashInfo,
-    blocks: &[PreparedBlockData],
-    opts: &FlashOptions,
-) -> Result<(), FlashError> {
-    let bitrate_cfg = j2534_bitrate_config(bitrate)?;
-
-    if native_isotp {
-        // VW ECUs require an OBD-II DTC clear before the programming
-        // precondition check.  Open a temporary ISO 15765 transport on the
-        // OBD-II IDs, send mode 04, then drop it before opening the main
-        // flash transport.
-        send_progress(opts, ProgressUpdate::ClearingDtcs);
-        let obd_config = IsoTPConfig::new_from_tx_rx(
-            0,
-            Identifier::Standard(0x700),
-            Identifier::Standard(0x7E8),
-        );
-        match automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate_cfg, obd_config) {
-            Ok(obd) => {
-                send_obd_dtc_clear::<J2534NativeIsoTpTransport>(&obd).await;
-                tokio::task::spawn_blocking(move || drop(obd))
-                    .await
-                    .map_err(|e| {
-                        FlashError::Interface(format!("OBD channel teardown failed: {e}"))
-                    })?;
-            }
-            Err(e) => {
-                tracing::warn!("OBD DTC clear channel open failed: {e} (continuing)");
-            }
-        }
-
-        let mut flash_config = make_isotp_config(flash_info);
-        let stmin_us = opts.stmin_override.unwrap_or(flash_info.default_stmin_us);
-        flash_config.separation_time_min = Some(std::time::Duration::from_micros(stmin_us as u64));
-        let transport =
-            automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate_cfg, flash_config)
-                .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
-        let result = run_with_transport(&transport, flash_info, blocks, opts).await;
-
-        // Drop the flash transport before opening a new one for post-reset DTC clear.
-        tokio::task::spawn_blocking(move || drop(transport))
-            .await
-            .map_err(|e| FlashError::Interface(format!("Flash channel teardown failed: {e}")))?;
-
-        // After the ECU reboots, clear emission DTCs again (best-effort).
-        if result.is_ok() {
-            let obd_config = IsoTPConfig::new_from_tx_rx(
-                0,
-                Identifier::Standard(0x700),
-                Identifier::Standard(0x7E8),
-            );
-            match automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate_cfg, obd_config) {
-                Ok(obd) => {
-                    send_obd_dtc_clear::<J2534NativeIsoTpTransport>(&obd).await;
-                    tokio::task::spawn_blocking(move || drop(obd));
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Post-reset OBD DTC clear channel open failed: {e} (continuing)"
-                    );
-                }
-            }
-        }
-
-        result
-    } else {
-        let j = automotive::j2534::J2534CanAdapter::new(dll, bitrate_cfg)
-            .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
-        let adapter = AsyncCanAdapter::new(j);
-        let result = run_with_adapter(&adapter, flash_info, blocks, opts).await;
-        tokio::task::spawn_blocking(move || drop(adapter));
-        result
-    }
-}
-
-#[cfg(not(feature = "j2534"))]
-async fn flash_via_j2534(
-    _dll: Option<&str>,
-    _bitrate: u32,
-    _native_isotp: bool,
-    _flash_info: &FlashInfo,
-    _blocks: &[PreparedBlockData],
-    _opts: &FlashOptions,
-) -> Result<(), FlashError> {
-    Err(FlashError::Interface(
-        "J2534 support is not enabled. \
-         Recompile with `--features mqb-flash-uds/j2534`."
-            .into(),
-    ))
+    let session = Session::open(&opts.interface, flash_info, opts.stmin_override)?;
+    let result = session.flash_blocks(flash_info, &blocks, &opts).await;
+    session.close().await;
+    result
 }
 
 // ── ISO-TP config ─────────────────────────────────────────────────────────────
@@ -427,7 +253,7 @@ const TX_PADDING_BYTE: u8 = 0x55;
 ///
 /// Used by both the software ISO-TP path (via [`run_with_adapter`]) and the
 /// native J2534 ISO 15765 path.
-async fn run_with_transport<T: TransportLayer>(
+pub(crate) async fn run_with_transport<T: TransportLayer>(
     transport: &T,
     flash_info: &FlashInfo,
     blocks: &[PreparedBlockData],
@@ -482,39 +308,9 @@ async fn send_switchpatch<T: TransportLayer>(transport: &T) -> Result<(), FlashE
     }
 }
 
-// ── Software ISO-TP adapter runner ────────────────────────────────────────────
-
-/// Wrap a raw [`AsyncCanAdapter`] in software ISO-TP and call [`run_with_transport`].
-async fn run_with_adapter(
-    adapter: &AsyncCanAdapter,
-    flash_info: &FlashInfo,
-    blocks: &[PreparedBlockData],
-    opts: &FlashOptions,
-) -> Result<(), FlashError> {
-    // VW ECUs require an OBD-II DTC clear before programming precondition check.
-    // This must be sent on a separate channel (0x700 → 0x7E8) before the UDS session.
-    send_progress(opts, ProgressUpdate::ClearingDtcs);
-    send_obd_dtc_clear_via_adapter(adapter).await;
-
-    let mut config = make_isotp_config(flash_info);
-    // Fall back to the module's own STmin, not a global constant: Simos
-    // tolerates 400 µs, the transmission and AWD ECUs need 900 µs.
-    let stmin_us = opts.stmin_override.unwrap_or(flash_info.default_stmin_us);
-    config.separation_time_min = Some(std::time::Duration::from_micros(stmin_us as u64));
-    let isotp = IsoTPAdapter::new(adapter, config);
-    let result = run_with_transport(&isotp, flash_info, blocks, opts).await;
-
-    // After the ECU reboots, clear emission DTCs again (best-effort).
-    if result.is_ok() {
-        send_obd_dtc_clear_via_adapter(adapter).await;
-    }
-
-    result
-}
-
 // ── Progress helper ───────────────────────────────────────────────────────────
 
-fn send_progress(opts: &FlashOptions, update: ProgressUpdate) {
+pub(crate) fn send_progress(opts: &FlashOptions, update: ProgressUpdate) {
     if let Some(tx) = &opts.progress_tx {
         let _ = tx.send(update);
     }
@@ -530,7 +326,7 @@ fn send_progress(opts: &FlashOptions, update: ProgressUpdate) {
 /// are consumed transparently.  Each pending response resets the 5 s timeout.
 /// Errors and timeouts are logged and ignored — a failed DTC clear must not
 /// abort the flash sequence.
-async fn send_obd_dtc_clear<T: TransportLayer>(transport: &T) {
+pub(crate) async fn send_obd_dtc_clear<T: TransportLayer>(transport: &T) {
     tracing::info!("Sending OBD-II mode 04 (Clear DTCs) [tester=0x700, ECU=0x7E8]");
     if let Err(e) = transport.send(&[0x04]).await {
         tracing::warn!("OBD DTC clear send failed: {e} (continuing)");
@@ -573,7 +369,7 @@ async fn send_obd_dtc_clear<T: TransportLayer>(transport: &T) {
 /// Creates a temporary [`IsoTPAdapter`] on the shared adapter with the
 /// fixed OBD-II IDs (tester TX = 0x700, ECU RX = 0x7E8), calls
 /// [`send_obd_dtc_clear`], then discards the adapter.
-async fn send_obd_dtc_clear_via_adapter(adapter: &AsyncCanAdapter) {
+pub(crate) async fn send_obd_dtc_clear_via_adapter(adapter: &AsyncCanAdapter) {
     let mut config =
         IsoTPConfig::new_from_tx_rx(0, Identifier::from(0x700u32), Identifier::from(0x7E8u32));
     config.timeout = std::time::Duration::from_secs(2);
@@ -979,43 +775,21 @@ pub enum ProbeOutcome {
 
 /// Run one read-only probe against an ECU.
 ///
-/// Opens the physical device, asks the question, and closes it again. The
-/// interface dispatch lives here — exactly once — so callers never duplicate
-/// the `Interface` match arms.
+/// Opens the physical device, asks the question, and closes it again. A caller
+/// asking several questions in a row should open a [`Session`] once and call
+/// [`Session::probe`] rather than paying for an open and close each time.
 pub async fn probe(
     interface: &Interface,
     flash_info: &'static FlashInfo,
     what: ProbeKind,
 ) -> Result<ProbeOutcome, FlashError> {
-    match interface {
-        Interface::Fake(path) => {
-            let fake = FakeCanAdapter::new(path.as_path())
-                .map_err(|e| FlashError::Interface(format!("Fixture load error: {e}")))?;
-            let adapter = AsyncCanAdapter::new(fake);
-            let isotp = IsoTPAdapter::new(&adapter, make_isotp_config(flash_info));
-            run_probe(&isotp, flash_info, what).await
-        }
-        Interface::SocketCan(iface) => probe_via_socketcan(iface, flash_info, what).await,
-        Interface::Panda => {
-            let bitrate_cfg = BitrateBuilder::new::<automotive::panda::Panda>()
-                .bitrate(500_000)
-                .build()
-                .map_err(|e| FlashError::Interface(format!("Panda bitrate config error: {e}")))?;
-            let panda = automotive::panda::Panda::new(bitrate_cfg)
-                .map_err(|e| FlashError::Interface(format!("Panda open error: {e}")))?;
-            let adapter = AsyncCanAdapter::new(panda);
-            let isotp = IsoTPAdapter::new(&adapter, make_isotp_config(flash_info));
-            run_probe(&isotp, flash_info, what).await
-        }
-        Interface::J2534 {
-            dll,
-            bitrate,
-            native_isotp,
-        } => probe_via_j2534(dll.as_deref(), *bitrate, *native_isotp, flash_info, what).await,
-    }
+    let session = Session::open(interface, flash_info, None)?;
+    let result = session.probe(flash_info, what).await;
+    session.close().await;
+    result
 }
 
-async fn run_probe<T: TransportLayer>(
+pub(crate) async fn run_probe<T: TransportLayer>(
     transport: &T,
     flash_info: &'static FlashInfo,
     what: ProbeKind,
@@ -1037,186 +811,21 @@ async fn run_probe<T: TransportLayer>(
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "socketcan"))]
-async fn probe_via_socketcan(
-    iface: &str,
-    flash_info: &'static FlashInfo,
-    what: ProbeKind,
-) -> Result<ProbeOutcome, FlashError> {
-    let sc = automotive::socketcan::SocketCanAdapter::open(iface)
-        .map_err(|e| FlashError::Interface(format!("SocketCAN open error: {e}")))?;
-    let adapter = AsyncCanAdapter::new(sc);
-    let isotp = IsoTPAdapter::new(&adapter, make_isotp_config(flash_info));
-    run_probe(&isotp, flash_info, what).await
-}
-
-#[cfg(not(all(target_os = "linux", feature = "socketcan")))]
-async fn probe_via_socketcan(
-    _iface: &str,
-    _flash_info: &'static FlashInfo,
-    _what: ProbeKind,
-) -> Result<ProbeOutcome, FlashError> {
-    Err(FlashError::Interface(
-        "SocketCAN support is not enabled. \
-         Recompile with `--features mqb-flash-uds/socketcan` on Linux."
-            .into(),
-    ))
-}
-
-#[cfg(feature = "j2534")]
-async fn probe_via_j2534(
-    dll: Option<&str>,
-    bitrate: u32,
-    native_isotp: bool,
-    flash_info: &'static FlashInfo,
-    what: ProbeKind,
-) -> Result<ProbeOutcome, FlashError> {
-    let bitrate_cfg = j2534_bitrate_config(bitrate)?;
-    if native_isotp {
-        let transport = automotive::j2534::J2534NativeIsoTpTransport::new(
-            dll,
-            bitrate_cfg,
-            make_isotp_config(flash_info),
-        )
-        .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
-        let result = run_probe(&transport, flash_info, what).await;
-        // Drop on a blocking thread: the J2534 teardown joins DLL threads and
-        // would otherwise stall the async runtime and freeze the UI.
-        tokio::task::spawn_blocking(move || drop(transport));
-        result
-    } else {
-        let j = automotive::j2534::J2534CanAdapter::new(dll, bitrate_cfg)
-            .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
-        let adapter = AsyncCanAdapter::new(j);
-        let isotp = IsoTPAdapter::new(&adapter, make_isotp_config(flash_info));
-        let result = run_probe(&isotp, flash_info, what).await;
-        drop(isotp);
-        tokio::task::spawn_blocking(move || drop(adapter));
-        result
-    }
-}
-
-#[cfg(not(feature = "j2534"))]
-async fn probe_via_j2534(
-    _dll: Option<&str>,
-    _bitrate: u32,
-    _native_isotp: bool,
-    _flash_info: &'static FlashInfo,
-    _what: ProbeKind,
-) -> Result<ProbeOutcome, FlashError> {
-    Err(FlashError::Interface(
-        "J2534 support is not enabled. \
-         Recompile with `--features mqb-flash-uds/j2534`."
-            .into(),
-    ))
-}
-
 // ── Read ECU data ─────────────────────────────────────────────────────────────
 
 /// Read ECU data records from a connected ECU.
+///
+/// Opens the device, reads, and closes it again. Use [`Session::read_ecu_data`]
+/// when the connection is already open.
 pub async fn read_ecu_data(
     flash_info: &FlashInfo,
     interface: Interface,
 ) -> Result<HashMap<String, String>, FlashError> {
     tracing::info!(interface = %interface, "Reading ECU data");
-
-    match &interface {
-        Interface::Fake(fixture_path) => {
-            let fake = FakeCanAdapter::new(fixture_path.as_path())
-                .map_err(|e| FlashError::Interface(format!("Fixture load error: {e}")))?;
-            let adapter = AsyncCanAdapter::new(fake);
-            read_ecu_with_adapter(&adapter, flash_info).await
-        }
-        Interface::SocketCan(iface) => read_ecu_via_socketcan(iface, flash_info).await,
-        Interface::Panda => {
-            let bitrate_cfg = BitrateBuilder::new::<automotive::panda::Panda>()
-                .bitrate(500_000)
-                .build()
-                .map_err(|e| FlashError::Interface(format!("Panda bitrate config error: {e}")))?;
-            let panda = automotive::panda::Panda::new(bitrate_cfg)
-                .map_err(|e| FlashError::Interface(format!("Panda open error: {e}")))?;
-            let adapter = AsyncCanAdapter::new(panda);
-            read_ecu_with_adapter(&adapter, flash_info).await
-        }
-        Interface::J2534 {
-            dll,
-            bitrate,
-            native_isotp,
-        } => read_ecu_via_j2534(dll.as_deref(), *bitrate, *native_isotp, flash_info).await,
-    }
-}
-
-#[cfg(feature = "j2534")]
-async fn read_ecu_via_j2534(
-    dll: Option<&str>,
-    bitrate: u32,
-    native_isotp: bool,
-    flash_info: &FlashInfo,
-) -> Result<HashMap<String, String>, FlashError> {
-    let bitrate_cfg = j2534_bitrate_config(bitrate)?;
-
-    if native_isotp {
-        let config = make_isotp_config(flash_info);
-        let transport = automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate_cfg, config)
-            .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
-        let result = read_ecu_with_transport(&transport).await;
-        // Drop on a blocking thread so the J2534 thread joins don't block
-        // the async runtime (which would freeze the GUI for seconds).
-        tokio::task::spawn_blocking(move || drop(transport));
-        result
-    } else {
-        let j = automotive::j2534::J2534CanAdapter::new(dll, bitrate_cfg)
-            .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
-        let adapter = AsyncCanAdapter::new(j);
-        let result = read_ecu_with_adapter(&adapter, flash_info).await;
-        tokio::task::spawn_blocking(move || drop(adapter));
-        result
-    }
-}
-
-#[cfg(not(feature = "j2534"))]
-async fn read_ecu_via_j2534(
-    _dll: Option<&str>,
-    _bitrate: u32,
-    _native_isotp: bool,
-    _flash_info: &FlashInfo,
-) -> Result<HashMap<String, String>, FlashError> {
-    Err(FlashError::Interface(
-        "J2534 support is not enabled. \
-         Recompile with `--features mqb-flash-uds/j2534`."
-            .into(),
-    ))
-}
-
-#[cfg(all(target_os = "linux", feature = "socketcan"))]
-async fn read_ecu_via_socketcan(
-    iface: &str,
-    flash_info: &FlashInfo,
-) -> Result<HashMap<String, String>, FlashError> {
-    let sc = automotive::socketcan::SocketCanAdapter::open(iface)
-        .map_err(|e| FlashError::Interface(format!("SocketCAN open error: {e}")))?;
-    let adapter = AsyncCanAdapter::new(sc);
-    read_ecu_with_adapter(&adapter, flash_info).await
-}
-
-#[cfg(not(all(target_os = "linux", feature = "socketcan")))]
-async fn read_ecu_via_socketcan(
-    _iface: &str,
-    _flash_info: &FlashInfo,
-) -> Result<HashMap<String, String>, FlashError> {
-    Err(FlashError::Interface(
-        "SocketCAN support is not enabled. \
-         Recompile with `--features mqb-flash-uds/socketcan` on Linux."
-            .into(),
-    ))
-}
-
-async fn read_ecu_with_adapter(
-    adapter: &AsyncCanAdapter,
-    flash_info: &FlashInfo,
-) -> Result<HashMap<String, String>, FlashError> {
-    let isotp = IsoTPAdapter::new(adapter, make_isotp_config(flash_info));
-    read_ecu_with_transport(&isotp).await
+    let session = Session::open(&interface, flash_info, None)?;
+    let result = session.read_ecu_data(flash_info).await;
+    session.close().await;
+    result
 }
 
 /// Read the standard data-record sweep and return it keyed by human description.
@@ -1284,6 +893,20 @@ pub async fn read_dids<T: TransportLayer>(transport: &T, dids: &[u16]) -> HashMa
         }
     }
     out
+}
+
+/// Write one DID over an already-open transport.
+///
+/// Unlike [`read_dids`] this reports failure: a write that the ECU refuses is
+/// something the caller has to know about, not something to skip past.
+pub async fn write_did<T: TransportLayer>(
+    transport: &T,
+    did: u16,
+    value: &[u8],
+) -> Result<(), FlashError> {
+    let uds = UDSClient::new(transport);
+    uds.write_data_by_identifier(did, value).await?;
+    Ok(())
 }
 
 /// Open the default (`0x03`) diagnostic session over an already-open transport.

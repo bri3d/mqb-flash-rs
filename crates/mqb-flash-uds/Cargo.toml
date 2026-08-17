@@ -7,12 +7,13 @@ description = "SA2 VM, UDS session management, and ECU flashing over CAN"
 
 [features]
 # Enable SocketCAN support (Linux only; requires the `automotive/socketcan` feature)
-socketcan = ["automotive/socketcan"]
+socketcan = ["automotive/socketcan", "mqb-transport/socketcan"]
 # Enable SAE J2534 PassThru support (Windows)
-j2534 = ["automotive/j2534"]
+j2534 = ["automotive/j2534", "mqb-transport/j2534"]
 
 [dependencies]
 mqb-transport.workspace = true
+mqb-immo.workspace = true
 mqb-bytes.workspace = true
 mqb-lzss.workspace = true
 mqb-modules.workspace = true
@@ -27,6 +28,8 @@ automotive.workspace = true
 
 [dev-dependencies]
 mqb-binfile.workspace = true
+mqb-immo.workspace = true
+mqb-nvcrypt.workspace = true
 mqb-cboot.workspace = true
 mqb-checksum.workspace = true
 mqb-modules.workspace = true

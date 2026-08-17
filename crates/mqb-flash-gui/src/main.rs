@@ -33,7 +33,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length, Subscription, Task};
 
-use mqb_flash_uds::identify::{Candidate, ChannelIdentification, IDENT_CHANNELS};
+use mqb_flash_uds::identify::{Candidate, ChannelIdentification};
 use mqb_flash_uds::immo::{ImmoReport, ImmoSnapshot, ImmoSupport, Severity};
 use mqb_flash_uds::unlock::{UnlockProbe, UnlockState};
 use mqb_flash_uds::{
@@ -775,17 +775,10 @@ fn start_scan(state: &mut State) -> Task<Message> {
     state.chosen_candidate = None;
     state.chosen_channel = None;
 
+    // One connection for the whole sweep where the interface allows it —
+    // opening a J2534 device per channel is seconds of dead time each.
     Task::future(async move {
-        let mut found = Vec::new();
-        for channel in IDENT_CHANNELS {
-            let flash_info = channel.probe_flash_info();
-            match mqb_flash_uds::probe(&interface, flash_info, ProbeKind::Identify).await {
-                Ok(ProbeOutcome::Identify(Some(ident))) => found.push(ident),
-                Ok(_) => {}
-                Err(e) => tracing::debug!(channel = channel.label, "probe failed: {e}"),
-            }
-        }
-        Message::ScanFinished(found)
+        Message::ScanFinished(mqb_flash_uds::identify_all_channels(&interface).await)
     })
 }
 

@@ -1,0 +1,10 @@
+[package]
+name = "mqb-nvcrypt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Simos18 NVRAM (DFlash) record parsing, Hitag2 channel crypto, and the immobilizer record codec"
+
+[dependencies]
+mqb-bytes.workspace = true
+thiserror.workspace = true

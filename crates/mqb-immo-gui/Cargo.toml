@@ -1,0 +1,29 @@
+[package]
+name = "mqb-immo-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "iced GUI for the Simos18 immobilizer: live state, master emulation, identity writes, and DFlash editing"
+
+[[bin]]
+name = "mqb-immo"
+path = "src/main.rs"
+
+[dependencies]
+iced           = { workspace = true }
+rfd            = { workspace = true }
+tokio          = { workspace = true }
+tracing        = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+mqb-immo       = { workspace = true }
+mqb-nvcrypt    = { workspace = true }
+mqb-modules    = { workspace = true }
+mqb-transport  = { workspace = true }
+mqb-flash-uds  = { workspace = true }
+automotive     = { workspace = true }
+
+[features]
+default = []
+socketcan = ["mqb-flash-uds/socketcan", "mqb-transport/socketcan"]
+j2534 = ["mqb-flash-uds/j2534", "mqb-transport/j2534"]

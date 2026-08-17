@@ -39,21 +39,26 @@ clippy:
 # Compile the feature-gated j2534 adapters
 check-j2534:
     cargo check -p mqb-flash-uds --features j2534 --all-targets --target {{x64}}
+    cargo check -p mqb-immo-gui --features j2534 --all-targets --target {{x64}}
 
 # Everything CI gates on, in one command. Run this before pushing.
 ci: fmt-check clippy test check-j2534
 
-# Build 64-bit release binaries (CLI + GUI + Logger + A2L Viewer)
+# Build 64-bit release binaries (CLI + Flash GUI + Immo GUI + Logger + A2L Viewer)
 build-x64:
-    cargo build --release --package mqb-flash-cli --package mqb-flash-gui --package mqb-logger-gui --package mqb-a2l-viewer --features mqb-flash-cli/j2534,mqb-flash-gui/j2534 --target {{x64}}
+    cargo build --release --package mqb-flash-cli --package mqb-flash-gui --package mqb-immo-gui --package mqb-logger-gui --package mqb-a2l-viewer --features mqb-flash-cli/j2534,mqb-flash-gui/j2534,mqb-immo-gui/j2534 --target {{x64}}
 
 # First-time setup: rustup target add i686-pc-windows-msvc
 
-# Build 32-bit release binaries (CLI + GUI)
+# Build 32-bit release binaries (CLI + Flash GUI + Immo GUI)
+#
+# The 32-bit builds exist for J2534: a PassThru DLL can only be loaded by a
+# process of its own architecture, and several vendors ship 32-bit only. Both
+# GUIs that open a J2534 device therefore need an x86 build.
 build-x86:
-    cargo build --release --package mqb-flash-cli --package mqb-flash-gui --features mqb-flash-cli/j2534,mqb-flash-gui/j2534 --target {{x86}}
+    cargo build --release --package mqb-flash-cli --package mqb-flash-gui --package mqb-immo-gui --features mqb-flash-cli/j2534,mqb-flash-gui/j2534,mqb-immo-gui/j2534 --target {{x86}}
 
-# Build CLI + GUI for both architectures
+# Build every shipped binary for both architectures
 build: build-x64 build-x86
 
 # Build both and stage to dist/
@@ -63,6 +68,8 @@ dist: build
     Copy-Item target/{{x86}}/release/mqb-flash.exe     dist/mqb-flash-x86.exe     -Force
     Copy-Item target/{{x64}}/release/mqb-flash-gui.exe  dist/mqb-flash-gui-x64.exe  -Force
     Copy-Item target/{{x86}}/release/mqb-flash-gui.exe  dist/mqb-flash-gui-x86.exe  -Force
+    Copy-Item target/{{x64}}/release/mqb-immo.exe       dist/mqb-immo-x64.exe       -Force
+    Copy-Item target/{{x86}}/release/mqb-immo.exe       dist/mqb-immo-x86.exe       -Force
     Copy-Item target/{{x64}}/release/mqb-logger-gui.exe  dist/mqb-logger-gui-x64.exe  -Force
     Copy-Item target/{{x64}}/release/mqb-a2l-viewer.exe dist/mqb-a2l-viewer-x64.exe -Force
-    @Write-Host "dist/ is ready: mqb-flash-{x64,x86}.exe, mqb-flash-gui-{x64,x86}.exe, mqb-logger-gui-x64.exe, mqb-a2l-viewer-x64.exe"
+    @Write-Host "dist/ is ready: mqb-flash-{x64,x86}.exe, mqb-flash-gui-{x64,x86}.exe, mqb-immo-{x64,x86}.exe, mqb-logger-gui-x64.exe, mqb-a2l-viewer-x64.exe"

@@ -5,6 +5,7 @@ pub mod flash;
 pub mod identify;
 pub mod immo;
 pub mod prepare;
+pub mod session;
 pub mod unlock;
 pub mod workshop;
 
@@ -14,7 +15,8 @@ pub use automotive::TransportLayer;
 pub use fixup::{checksum_and_patch_blocks, FixupError, FixupReport};
 pub use flash::{
     flash_blocks, make_isotp_config, open_extended_session, probe, read_dids, read_ecu_data,
-    read_ecu_with_transport, FlashError, FlashOptions, ProbeKind, ProbeOutcome, ProgressUpdate,
+    read_ecu_with_transport, write_did, FlashError, FlashOptions, ProbeKind, ProbeOutcome,
+    ProgressUpdate,
 };
 pub use identify::{
     candidates_from_dids, identify_on_channel, Candidate, ChannelIdentification, ChannelKind,
@@ -29,6 +31,7 @@ pub use prepare::{
     compress_and_encrypt, prepare_block, prepare_block_for_flash, prepare_patch_block,
     prepare_patch_for_flash,
 };
+pub use session::{identify_all_channels, Session};
 pub use unlock::{leave_bootloader, probe_unlock_state, UnlockProbe, UnlockState};
 pub use workshop::WorkshopCode;
 
