@@ -6,9 +6,15 @@ use mqb_a2l::reader::CharacteristicValues;
 use mqb_a2l::{A2lFile, Characteristic};
 
 use crate::state::Msg;
-use crate::theme::{diff_cell_colors, diff_pct_color, error_color, muted_text, rescale_warning_bg, rescale_warning_color, warning_color};
+use crate::theme::{
+    diff_cell_colors, diff_pct_color, error_color, muted_text, rescale_warning_bg,
+    rescale_warning_color, warning_color,
+};
 use crate::view_single::{view_curve, view_values};
-use crate::widgets::{diff_map_table_with_axis_diff, format_pct, format_val, map_table, map_table_with_axis_diff, pct_diff};
+use crate::widgets::{
+    diff_map_table_with_axis_diff, format_pct, format_val, map_table, map_table_with_axis_diff,
+    pct_diff,
+};
 use crate::MONO;
 
 pub fn view_compare<'a>(
@@ -20,51 +26,44 @@ pub fn view_compare<'a>(
     show_percent: bool,
 ) -> Element<'a, Msg> {
     match (v1, v2) {
-        (Some(val1), Some(val2)) => view_compare_pair(val1, val2, ch, a2l, rescale_suspect, show_percent),
-        (Some(val1), None) => {
-            column![
-                text("BIN 1").size(13),
-                view_values(val1, ch, a2l),
-                text("BIN 2: could not read").size(13).color(error_color()),
-            ]
-            .spacing(8)
-            .into()
+        (Some(val1), Some(val2)) => {
+            view_compare_pair(val1, val2, ch, a2l, rescale_suspect, show_percent)
         }
-        (None, Some(val2)) => {
-            column![
-                text("BIN 1: could not read").size(13).color(error_color()),
-                text("BIN 2").size(13),
-                view_values(val2, ch, a2l),
-            ]
-            .spacing(8)
-            .into()
-        }
-        (None, None) => {
-            text("Could not read this characteristic from either binary.")
-                .size(13)
-                .color(error_color())
-                .into()
-        }
+        (Some(val1), None) => column![
+            text("BIN 1").size(13),
+            view_values(val1, ch, a2l),
+            text("BIN 2: could not read").size(13).color(error_color()),
+        ]
+        .spacing(8)
+        .into(),
+        (None, Some(val2)) => column![
+            text("BIN 1: could not read").size(13).color(error_color()),
+            text("BIN 2").size(13),
+            view_values(val2, ch, a2l),
+        ]
+        .spacing(8)
+        .into(),
+        (None, None) => text("Could not read this characteristic from either binary.")
+            .size(13)
+            .color(error_color())
+            .into(),
     }
 }
 
 fn rescale_warning_banner<'a>() -> Element<'a, Msg> {
-    container(
-        text("Axis changed but map values are identical — may need rescaling")
-            .size(13),
-    )
-    .padding([6, 10])
-    .style(|theme: &Theme| container::Style {
-        background: Some(rescale_warning_bg(theme).into()),
-        text_color: Some(rescale_warning_color(theme)),
-        border: iced::Border {
-            color: rescale_warning_color(theme),
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..Default::default()
-    })
-    .into()
+    container(text("Axis changed but map values are identical — may need rescaling").size(13))
+        .padding([6, 10])
+        .style(|theme: &Theme| container::Style {
+            background: Some(rescale_warning_bg(theme).into()),
+            text_color: Some(rescale_warning_color(theme)),
+            border: iced::Border {
+                color: rescale_warning_color(theme),
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 fn view_compare_pair<'a>(
@@ -86,12 +85,22 @@ fn view_compare_pair<'a>(
         (CharacteristicValues::Ascii(a), CharacteristicValues::Ascii(b)) => {
             view_compare_ascii(a, b)
         }
-        (CharacteristicValues::Curve { x: x1, y: y1 }, CharacteristicValues::Curve { x: x2, y: y2 }) => {
-            view_compare_curve(x1, y1, x2, y2, ch, a2l, show_percent)
-        }
-        (CharacteristicValues::Map { x: x1, y: y1, z: z1 }, CharacteristicValues::Map { x: x2, y: y2, z: z2 }) => {
-            view_compare_map(x1, y1, z1, x2, y2, z2, ch, a2l, show_percent)
-        }
+        (
+            CharacteristicValues::Curve { x: x1, y: y1 },
+            CharacteristicValues::Curve { x: x2, y: y2 },
+        ) => view_compare_curve(x1, y1, x2, y2, ch, a2l, show_percent),
+        (
+            CharacteristicValues::Map {
+                x: x1,
+                y: y1,
+                z: z1,
+            },
+            CharacteristicValues::Map {
+                x: x2,
+                y: y2,
+                z: z2,
+            },
+        ) => view_compare_map(x1, y1, z1, x2, y2, z2, ch, a2l, show_percent),
         (CharacteristicValues::ValBlk(a), CharacteristicValues::ValBlk(b)) => {
             view_compare_val_blk(a, b, ch, a2l, show_percent)
         }
@@ -112,7 +121,13 @@ fn view_compare_pair<'a>(
     outer.into()
 }
 
-fn view_compare_scalar<'a>(v1: f64, v2: f64, ch: &'a Characteristic, a2l: &'a A2lFile, show_percent: bool) -> Element<'a, Msg> {
+fn view_compare_scalar<'a>(
+    v1: f64,
+    v2: f64,
+    ch: &'a Characteristic,
+    a2l: &'a A2lFile,
+    show_percent: bool,
+) -> Element<'a, Msg> {
     let cm = a2l.compu_methods.get(&ch.compu_method_ref);
     let unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
 
@@ -137,11 +152,14 @@ fn view_compare_scalar<'a>(v1: f64, v2: f64, ch: &'a Characteristic, a2l: &'a A2
             let same = v1 as i64 == v2 as i64;
             let label2 = format!("BIN 2:  {l2} (raw: {})", v2 as i64);
             col = col.push(
-                container(text(label2).size(16))
-                    .style(move |theme: &Theme| container::Style {
-                        text_color: Some(if same { muted_text(theme) } else { diff_pct_color(1.0, theme) }),
-                        ..Default::default()
-                    })
+                container(text(label2).size(16)).style(move |theme: &Theme| container::Style {
+                    text_color: Some(if same {
+                        muted_text(theme)
+                    } else {
+                        diff_pct_color(1.0, theme)
+                    }),
+                    ..Default::default()
+                }),
             );
             return col.into();
         }
@@ -151,13 +169,14 @@ fn view_compare_scalar<'a>(v1: f64, v2: f64, ch: &'a Characteristic, a2l: &'a A2
     col = col.push(
         row![
             text(format!("BIN 2:  {:.6} {unit}", v2)).size(16),
-            container(text(format!("  ({diff_annotation})")).size(14))
-                .style(move |theme: &Theme| container::Style {
+            container(text(format!("  ({diff_annotation})")).size(14)).style(
+                move |theme: &Theme| container::Style {
                     text_color: Some(diff_pct_color(pct, theme)),
                     ..Default::default()
-                }),
+                }
+            ),
         ]
-        .align_y(Alignment::Center)
+        .align_y(Alignment::Center),
     );
 
     col.into()
@@ -169,58 +188,73 @@ fn view_compare_ascii<'a>(a: &'a str, b: &'a str) -> Element<'a, Msg> {
     col = col.push(text(format!("BIN 1:  \"{a}\"")).size(14).font(MONO));
     if same {
         col = col.push(
-            container(text(format!("BIN 2:  \"{b}\"  (identical)")).size(14).font(MONO))
-                .style(|theme: &Theme| container::Style {
-                    text_color: Some(muted_text(theme)),
-                    ..Default::default()
-                })
+            container(
+                text(format!("BIN 2:  \"{b}\"  (identical)"))
+                    .size(14)
+                    .font(MONO),
+            )
+            .style(|theme: &Theme| container::Style {
+                text_color: Some(muted_text(theme)),
+                ..Default::default()
+            }),
         );
     } else {
         col = col.push(
-            container(text(format!("BIN 2:  \"{b}\"  (changed)")).size(14).font(MONO))
-                .style(|theme: &Theme| container::Style {
-                    text_color: Some(diff_pct_color(1.0, theme)),
-                    ..Default::default()
-                })
+            container(
+                text(format!("BIN 2:  \"{b}\"  (changed)"))
+                    .size(14)
+                    .font(MONO),
+            )
+            .style(|theme: &Theme| container::Style {
+                text_color: Some(diff_pct_color(1.0, theme)),
+                ..Default::default()
+            }),
         );
     }
     col.into()
 }
 
 fn view_compare_curve<'a>(
-    x1: &'a [f64], y1: &'a [f64],
-    x2: &'a [f64], y2: &'a [f64],
+    x1: &'a [f64],
+    y1: &'a [f64],
+    x2: &'a [f64],
+    y2: &'a [f64],
     ch: &'a Characteristic,
     a2l: &'a A2lFile,
     show_percent: bool,
 ) -> Element<'a, Msg> {
     let cm = a2l.compu_methods.get(&ch.compu_method_ref);
     let val_unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
-    let axis_unit = ch.axes.first()
+    let axis_unit = ch
+        .axes
+        .first()
         .and_then(|ax| a2l.compu_methods.get(&ax.compu_method_ref))
         .map(|c| c.unit.as_str())
         .unwrap_or("");
 
     let axes_same = x1 == x2;
 
-    let axis_name = ch.axes.first()
-        .and_then(|ax| ax.axis_pts_ref.as_deref());
+    let axis_name = ch.axes.first().and_then(|ax| ax.axis_pts_ref.as_deref());
 
     // Different lengths — show two independent tables
     if x1.len() != x2.len() {
         let mut col = column![].spacing(8);
         let size_msg = if let Some(name) = axis_name {
-            format!("Axis sizes differ: {} vs {} points ({name})", x1.len(), x2.len())
+            format!(
+                "Axis sizes differ: {} vs {} points ({name})",
+                x1.len(),
+                x2.len()
+            )
         } else {
             format!("Axis sizes differ: {} vs {} points", x1.len(), x2.len())
         };
-        col = col.push(
-            container(text(size_msg).size(12))
-                .style(|theme: &Theme| container::Style {
+        col =
+            col.push(
+                container(text(size_msg).size(12)).style(|theme: &Theme| container::Style {
                     text_color: Some(warning_color(theme)),
                     ..Default::default()
-                })
-        );
+                }),
+            );
         col = col.push(text("BIN 1").size(13));
         col = col.push(view_curve(x1, y1, ch, a2l));
         col = col.push(horizontal_rule(1));
@@ -236,9 +270,18 @@ fn view_compare_curve<'a>(
         let delta_header = if show_percent { "%" } else { "Δ" };
         col = col.push(
             row![
-                text(format!("X ({axis_unit})")).size(12).width(100).font(MONO),
-                text(format!("BIN 1 ({val_unit})")).size(12).width(100).font(MONO),
-                text(format!("BIN 2 ({val_unit})")).size(12).width(100).font(MONO),
+                text(format!("X ({axis_unit})"))
+                    .size(12)
+                    .width(100)
+                    .font(MONO),
+                text(format!("BIN 1 ({val_unit})"))
+                    .size(12)
+                    .width(100)
+                    .font(MONO),
+                text(format!("BIN 2 ({val_unit})"))
+                    .size(12)
+                    .width(100)
+                    .font(MONO),
                 text(delta_header).size(12).width(80).font(MONO),
             ]
             .spacing(4),
@@ -263,20 +306,22 @@ fn view_compare_curve<'a>(
                 row![
                     text(format_val(xi)).size(12).width(100).font(MONO),
                     text(format_val(v1)).size(12).width(100).font(MONO),
-                    container(text(format_val(v2)).size(12).width(100).font(MONO))
-                        .style(move |theme: &Theme| {
+                    container(text(format_val(v2)).size(12).width(100).font(MONO)).style(
+                        move |theme: &Theme| {
                             let (bg, fg) = diff_cell_colors(pct, theme);
                             container::Style {
                                 background: Some(bg.into()),
                                 text_color: Some(fg),
                                 ..Default::default()
                             }
-                        }),
-                    container(text(diff_str).size(12).width(80).font(MONO))
-                        .style(move |theme: &Theme| container::Style {
+                        }
+                    ),
+                    container(text(diff_str).size(12).width(80).font(MONO)).style(
+                        move |theme: &Theme| container::Style {
                             text_color: Some(diff_pct_color(pct, theme)),
                             ..Default::default()
-                        }),
+                        }
+                    ),
                 ]
                 .spacing(4),
             );
@@ -288,21 +333,33 @@ fn view_compare_curve<'a>(
         } else {
             "Axis breakpoints differ between BINs".to_string()
         };
-        col = col.push(
-            container(text(axis_msg).size(12))
-                .style(|theme: &Theme| container::Style {
+        col =
+            col.push(
+                container(text(axis_msg).size(12)).style(|theme: &Theme| container::Style {
                     text_color: Some(warning_color(theme)),
                     ..Default::default()
-                })
-        );
+                }),
+            );
         let dx_header = if show_percent { "%X" } else { "ΔX" };
         let dy_header = if show_percent { "%Y" } else { "ΔY" };
         col = col.push(
             row![
-                text(format!("X1 ({axis_unit})")).size(12).width(90).font(MONO),
-                text(format!("BIN 1 ({val_unit})")).size(12).width(90).font(MONO),
-                text(format!("X2 ({axis_unit})")).size(12).width(90).font(MONO),
-                text(format!("BIN 2 ({val_unit})")).size(12).width(90).font(MONO),
+                text(format!("X1 ({axis_unit})"))
+                    .size(12)
+                    .width(90)
+                    .font(MONO),
+                text(format!("BIN 1 ({val_unit})"))
+                    .size(12)
+                    .width(90)
+                    .font(MONO),
+                text(format!("X2 ({axis_unit})"))
+                    .size(12)
+                    .width(90)
+                    .font(MONO),
+                text(format!("BIN 2 ({val_unit})"))
+                    .size(12)
+                    .width(90)
+                    .font(MONO),
                 text(dx_header).size(12).width(70).font(MONO),
                 text(dy_header).size(12).width(70).font(MONO),
             ]
@@ -341,8 +398,8 @@ fn view_compare_curve<'a>(
                 row![
                     text(format_val(xv1)).size(12).width(90).font(MONO),
                     text(format_val(v1)).size(12).width(90).font(MONO),
-                    container(text(format_val(xv2)).size(12).width(90).font(MONO))
-                        .style(move |theme: &Theme| {
+                    container(text(format_val(xv2)).size(12).width(90).font(MONO)).style(
+                        move |theme: &Theme| {
                             if x_changed {
                                 let (bg, fg) = diff_cell_colors(x_pct, theme);
                                 container::Style {
@@ -353,26 +410,30 @@ fn view_compare_curve<'a>(
                             } else {
                                 container::Style::default()
                             }
-                        }),
-                    container(text(format_val(v2)).size(12).width(90).font(MONO))
-                        .style(move |theme: &Theme| {
+                        }
+                    ),
+                    container(text(format_val(v2)).size(12).width(90).font(MONO)).style(
+                        move |theme: &Theme| {
                             let (bg, fg) = diff_cell_colors(y_pct, theme);
                             container::Style {
                                 background: Some(bg.into()),
                                 text_color: Some(fg),
                                 ..Default::default()
                             }
-                        }),
-                    container(text(x_diff_str).size(12).width(70).font(MONO))
-                        .style(move |theme: &Theme| container::Style {
+                        }
+                    ),
+                    container(text(x_diff_str).size(12).width(70).font(MONO)).style(
+                        move |theme: &Theme| container::Style {
                             text_color: Some(diff_pct_color(x_pct, theme)),
                             ..Default::default()
-                        }),
-                    container(text(y_diff_str).size(12).width(70).font(MONO))
-                        .style(move |theme: &Theme| container::Style {
+                        }
+                    ),
+                    container(text(y_diff_str).size(12).width(70).font(MONO)).style(
+                        move |theme: &Theme| container::Style {
                             text_color: Some(diff_pct_color(y_pct, theme)),
                             ..Default::default()
-                        }),
+                        }
+                    ),
                 ]
                 .spacing(4),
             );
@@ -384,8 +445,12 @@ fn view_compare_curve<'a>(
 
 #[allow(clippy::too_many_arguments)]
 fn view_compare_map<'a>(
-    x1: &'a [f64], y1: &'a [f64], z1: &'a [Vec<f64>],
-    x2: &'a [f64], y2: &'a [f64], z2: &'a [Vec<f64>],
+    x1: &'a [f64],
+    y1: &'a [f64],
+    z1: &'a [Vec<f64>],
+    x2: &'a [f64],
+    y2: &'a [f64],
+    z2: &'a [Vec<f64>],
     ch: &'a Characteristic,
     a2l: &'a A2lFile,
     show_percent: bool,
@@ -401,14 +466,18 @@ fn view_compare_map<'a>(
 
     // Axis change notes (empty when axes match)
     if !x_same || !y_same {
-        let x_axis_name = ch.axes.first()
-            .and_then(|ax| ax.axis_pts_ref.as_deref());
-        let y_axis_name = ch.axes.get(1)
-            .and_then(|ax| ax.axis_pts_ref.as_deref());
+        let x_axis_name = ch.axes.first().and_then(|ax| ax.axis_pts_ref.as_deref());
+        let y_axis_name = ch.axes.get(1).and_then(|ax| ax.axis_pts_ref.as_deref());
 
         let mut notes = Vec::new();
         if !size_same {
-            notes.push(format!("Grid size: {}x{} → {}x{}", x1.len(), y1.len(), x2.len(), y2.len()));
+            notes.push(format!(
+                "Grid size: {}x{} → {}x{}",
+                x1.len(),
+                y1.len(),
+                x2.len(),
+                y2.len()
+            ));
         }
         if !x_same {
             if let Some(name) = x_axis_name {
@@ -425,17 +494,24 @@ fn view_compare_map<'a>(
             }
         }
         let note_text = notes.join(" · ");
-        col = col.push(
-            container(text(note_text).size(12))
-                .style(|theme: &Theme| container::Style {
+        col =
+            col.push(
+                container(text(note_text).size(12)).style(|theme: &Theme| container::Style {
                     text_color: Some(warning_color(theme)),
                     ..Default::default()
-                })
-        );
+                }),
+            );
     }
 
     // BIN 1 map
-    col = col.push(text(format!("BIN 1 — {}x{} map (unit: {val_unit})", x1.len(), y1.len())).size(13));
+    col = col.push(
+        text(format!(
+            "BIN 1 — {}x{} map (unit: {val_unit})",
+            x1.len(),
+            y1.len()
+        ))
+        .size(13),
+    );
     col = col.push(map_table(x1, y1, z1, ch.lower_limit, ch.upper_limit));
 
     // BIN 2 — axis headers colored by diff from BIN 1 (neutral when axes match)
@@ -447,18 +523,36 @@ fn view_compare_map<'a>(
     col = col.push(text(diff_label).size(13));
 
     if size_same {
-        col = col.push(diff_map_table_with_axis_diff(x1, y1, x2, y2, z1, z2, show_percent));
+        col = col.push(diff_map_table_with_axis_diff(
+            x1,
+            y1,
+            x2,
+            y2,
+            z1,
+            z2,
+            show_percent,
+        ));
     } else {
         // Different grid sizes — can't do cell-level diff, show BIN 2 map with axis coloring
-        col = col.push(map_table_with_axis_diff(x1, y1, x2, y2, z2, ch.lower_limit, ch.upper_limit));
+        col = col.push(map_table_with_axis_diff(
+            x1,
+            y1,
+            x2,
+            y2,
+            z2,
+            ch.lower_limit,
+            ch.upper_limit,
+        ));
     }
 
     col = col.push(iced::widget::Space::new().width(0).height(14));
 
-    scrollable(col).direction(scrollable::Direction::Both {
-        vertical: scrollable::Scrollbar::new(),
-        horizontal: scrollable::Scrollbar::new(),
-    }).into()
+    scrollable(col)
+        .direction(scrollable::Direction::Both {
+            vertical: scrollable::Scrollbar::new(),
+            horizontal: scrollable::Scrollbar::new(),
+        })
+        .into()
 }
 
 fn view_compare_val_blk<'a>(
@@ -472,7 +566,13 @@ fn view_compare_val_blk<'a>(
     let unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
 
     let mut col = column![].spacing(2);
-    col = col.push(text(format!("{} values (unit: {unit})", vals1.len().max(vals2.len()))).size(12));
+    col = col.push(
+        text(format!(
+            "{} values (unit: {unit})",
+            vals1.len().max(vals2.len())
+        ))
+        .size(12),
+    );
 
     // Header
     let delta_header = if show_percent { "%" } else { "Δ" };
@@ -504,20 +604,22 @@ fn view_compare_val_blk<'a>(
             row![
                 text(format!("[{i}]")).size(12).width(40).font(MONO),
                 text(format_val(v1)).size(12).width(100).font(MONO),
-                container(text(format_val(v2)).size(12).width(100).font(MONO))
-                    .style(move |theme: &Theme| {
+                container(text(format_val(v2)).size(12).width(100).font(MONO)).style(
+                    move |theme: &Theme| {
                         let (bg, fg) = diff_cell_colors(pct, theme);
                         container::Style {
                             background: Some(bg.into()),
                             text_color: Some(fg),
                             ..Default::default()
                         }
-                    }),
-                container(text(diff_str).size(12).width(80).font(MONO))
-                    .style(move |theme: &Theme| container::Style {
+                    }
+                ),
+                container(text(diff_str).size(12).width(80).font(MONO)).style(
+                    move |theme: &Theme| container::Style {
                         text_color: Some(diff_pct_color(pct, theme)),
                         ..Default::default()
-                    }),
+                    }
+                ),
             ]
             .spacing(4),
         );

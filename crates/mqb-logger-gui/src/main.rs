@@ -9,10 +9,9 @@ use iced::event::{self, Event};
 use iced::mouse;
 use iced::widget::rule::{horizontal as horizontal_rule, vertical as vertical_rule};
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, scrollable, text,
-    text_input,
+    button, checkbox, column, container, mouse_area, row, scrollable, text, text_input,
 };
-use iced::{Alignment, Color, Element, Length, Subscription, Task, keyboard};
+use iced::{keyboard, Alignment, Color, Element, Length, Subscription, Task};
 
 use mqb_a2l::{A2lFile, Conversion, DataType};
 
@@ -107,7 +106,6 @@ struct State {
     dragging_split: bool,
 }
 
-
 impl Default for State {
     fn default() -> Self {
         Self {
@@ -167,8 +165,12 @@ impl State {
 
     /// Is this A2L measurement (by address) currently in the CSV item list?
     fn is_in_csv(&self, ecu_address: Option<u32>) -> bool {
-        let Some(addr) = ecu_address else { return false };
-        if addr == 0xFFFF_FFFF { return false; }
+        let Some(addr) = ecu_address else {
+            return false;
+        };
+        if addr == 0xFFFF_FFFF {
+            return false;
+        }
         self.csv_items.iter().any(|item| item.address == addr)
     }
 }
@@ -278,9 +280,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 for &idx in &state.filtered {
                     let m = &a2l.measurements[idx];
                     if !state.is_in_csv(m.ecu_address) {
-                        state
-                            .csv_items
-                            .push(csv_item_from_a2l(m, a2l));
+                        state.csv_items.push(csv_item_from_a2l(m, a2l));
                     }
                 }
             }
@@ -499,7 +499,11 @@ fn subscription(state: &State) -> Subscription<Message> {
 
 fn view(state: &State) -> Element<'_, Message> {
     // ── Top bar ────────────────────────────────────────────────────────────
-    let a2l_btn_label = if state.loading_a2l { "Loading…" } else { "Open A2L…" };
+    let a2l_btn_label = if state.loading_a2l {
+        "Loading…"
+    } else {
+        "Open A2L…"
+    };
     let a2l_btn = button(a2l_btn_label)
         .on_press_maybe((!state.loading_a2l).then_some(Message::OpenA2lPressed))
         .padding([6, 14]);
@@ -521,9 +525,13 @@ fn view(state: &State) -> Element<'_, Message> {
         String::new()
     };
 
-    let csv_btn = button(if state.loading_csv { "Loading…" } else { "Open CSV…" })
-        .on_press_maybe((!state.loading_csv).then_some(Message::OpenCsvPressed))
-        .padding([6, 14]);
+    let csv_btn = button(if state.loading_csv {
+        "Loading…"
+    } else {
+        "Open CSV…"
+    })
+    .on_press_maybe((!state.loading_csv).then_some(Message::OpenCsvPressed))
+    .padding([6, 14]);
 
     let csv_file_label = state
         .csv_path
@@ -551,8 +559,12 @@ fn view(state: &State) -> Element<'_, Message> {
     let topbar = row![
         a2l_btn,
         text(a2l_file_label),
-        text(a2l_status).size(12).color(Color::from_rgb(0.6, 0.6, 0.6)),
-        text("  |  ").size(12).color(Color::from_rgb(0.35, 0.35, 0.35)),
+        text(a2l_status)
+            .size(12)
+            .color(Color::from_rgb(0.6, 0.6, 0.6)),
+        text("  |  ")
+            .size(12)
+            .color(Color::from_rgb(0.35, 0.35, 0.35)),
         csv_btn,
         text(csv_file_label),
         save_btn,
@@ -602,9 +614,7 @@ fn view(state: &State) -> Element<'_, Message> {
     };
 
     let select_all_btn = button("Select All Visible")
-        .on_press_maybe(
-            (!state.filtered.is_empty()).then_some(Message::SelectAllVisible),
-        )
+        .on_press_maybe((!state.filtered.is_empty()).then_some(Message::SelectAllVisible))
         .padding([4, 10]);
 
     let list_header = row![
@@ -617,8 +627,7 @@ fn view(state: &State) -> Element<'_, Message> {
         list_header,
         horizontal_rule(1),
         filter_row,
-        scrollable(column(list_rows).spacing(0).width(Length::Fill))
-            .height(Length::Fill),
+        scrollable(column(list_rows).spacing(0).width(Length::Fill)).height(Length::Fill),
     ]
     .spacing(8)
     .width(state.split_x)
@@ -627,11 +636,9 @@ fn view(state: &State) -> Element<'_, Message> {
     // ── Right panel: CSV item list ─────────────────────────────────────────
     let csv_count = state.csv_items.len();
 
-    let csv_header = row![
-        text(format!("Log Channels  ({csv_count})"))
-            .size(15)
-            .width(Length::Fill),
-    ]
+    let csv_header = row![text(format!("Log Channels  ({csv_count})"))
+        .size(15)
+        .width(Length::Fill),]
     .align_y(Alignment::Center);
 
     let csv_rows: Vec<Element<'_, Message>> = state
@@ -639,14 +646,19 @@ fn view(state: &State) -> Element<'_, Message> {
         .iter()
         .enumerate()
         .map(|(idx, item)| {
-            csv_item_row(item, idx, &state.a2l_addr_index, state.a2l.as_deref(), state.editing.as_ref())
+            csv_item_row(
+                item,
+                idx,
+                &state.a2l_addr_index,
+                state.a2l.as_deref(),
+                state.editing.as_ref(),
+            )
         })
         .collect();
 
     let csv_content: Element<'_, Message> = if csv_rows.is_empty() {
         container(
-            text("No channels selected.\nOpen a CSV or select measurements from the A2L.")
-                .size(13),
+            text("No channels selected.\nOpen a CSV or select measurements from the A2L.").size(13),
         )
         .padding([8, 0])
         .into()
@@ -686,16 +698,16 @@ fn view(state: &State) -> Element<'_, Message> {
 
 // ─── Left panel: measurement row ─────────────────────────────────────────────
 
-fn measurement_row<'a>(
-    a2l: &'a A2lFile,
-    idx: usize,
-    state: &State,
-) -> Element<'a, Message> {
+fn measurement_row<'a>(a2l: &'a A2lFile, idx: usize, state: &State) -> Element<'a, Message> {
     let m = &a2l.measurements[idx];
     let is_selected = state.is_in_csv(m.ecu_address);
     let name = m.name.clone();
 
-    let desc: &str = if m.description.is_empty() { "—" } else { &m.description };
+    let desc: &str = if m.description.is_empty() {
+        "—"
+    } else {
+        &m.description
+    };
     let unit = a2l
         .compu_methods
         .get(&m.compu_method_ref)
@@ -752,17 +764,25 @@ fn csv_item_row<'a>(
 ) -> Element<'a, Message> {
     // Check what (if anything) is being edited for this row
     let editing_name = editing.and_then(|(t, d)| {
-        if *t == EditTarget::CsvName(idx) { Some(d.as_str()) } else { None }
+        if *t == EditTarget::CsvName(idx) {
+            Some(d.as_str())
+        } else {
+            None
+        }
     });
     let editing_equation = editing.and_then(|(t, d)| {
-        if *t == EditTarget::CsvEquation(idx) { Some(d.as_str()) } else { None }
+        if *t == EditTarget::CsvEquation(idx) {
+            Some(d.as_str())
+        } else {
+            None
+        }
     });
 
     // Cross-correlate: find A2L measurement at this address
     let a2l_match: Option<(&str, DataType)> = if !item.is_derived() {
-        addr_index
-            .get(&item.address)
-            .and_then(|&i| a2l.map(|a| (&a.measurements[i].name as &str, a.measurements[i].datatype)))
+        addr_index.get(&item.address).and_then(|&i| {
+            a2l.map(|a| (&a.measurements[i].name as &str, a.measurements[i].datatype))
+        })
     } else {
         None
     };
@@ -796,8 +816,12 @@ fn csv_item_row<'a>(
 
     let line1 = row![
         name_widget,
-        text(unit_display).size(11).color(Color::from_rgb(0.5, 0.7, 0.5)),
-        text(addr_label).size(11).color(Color::from_rgb(0.45, 0.55, 0.75)),
+        text(unit_display)
+            .size(11)
+            .color(Color::from_rgb(0.5, 0.7, 0.5)),
+        text(addr_label)
+            .size(11)
+            .color(Color::from_rgb(0.45, 0.55, 0.75)),
     ]
     .spacing(4)
     .align_y(Alignment::Center);
@@ -815,14 +839,21 @@ fn csv_item_row<'a>(
         None if item.is_derived() => String::new(),
         None => "(no A2L match)".to_string(),
     };
-    let line2_color = if a2l_match.map(|(n, _)| n != item.name.as_str()).unwrap_or(false) {
+    let line2_color = if a2l_match
+        .map(|(n, _)| n != item.name.as_str())
+        .unwrap_or(false)
+    {
         Color::from_rgb(0.7, 0.65, 0.4) // highlight renamed items
     } else {
         Color::from_rgb(0.5, 0.5, 0.5)
     };
 
     // Line 3: equation (editable)
-    let eq_str: &str = if item.equation.is_empty() { "x" } else { &item.equation };
+    let eq_str: &str = if item.equation.is_empty() {
+        "x"
+    } else {
+        &item.equation
+    };
     let line3_widget: Element<'_, Message> = if let Some(draft) = editing_equation {
         text_input("", draft)
             .id(EDIT_INPUT_ID)
@@ -851,7 +882,9 @@ fn csv_item_row<'a>(
     .spacing(1)
     .width(Length::Fill);
 
-    let remove_btn = button("×").on_press(Message::RemoveCsvItem(idx)).padding([2, 7]);
+    let remove_btn = button("×")
+        .on_press(Message::RemoveCsvItem(idx))
+        .padding([2, 7]);
 
     let full_row = row![detail, remove_btn]
         .spacing(6)
@@ -955,7 +988,9 @@ fn write_csv(items: &[CsvItem]) -> String {
             &item.assign_to,
         ];
         for (i, field) in fields.iter().enumerate() {
-            if i > 0 { out.push(','); }
+            if i > 0 {
+                out.push(',');
+            }
             if field.contains(',') || field.contains('"') || field.contains('\n') {
                 out.push('"');
                 out.push_str(&field.replace('"', "\"\""));

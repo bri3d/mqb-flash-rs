@@ -1,7 +1,6 @@
 use iced::widget::rule::{horizontal as horizontal_rule, vertical as vertical_rule};
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, pick_list, row, scrollable,
-    text, text_input,
+    button, checkbox, column, container, mouse_area, pick_list, row, scrollable, text, text_input,
 };
 use iced::{Alignment, Color, Element, Length, Theme};
 
@@ -30,7 +29,10 @@ pub fn view(state: &State) -> Element<'_, Msg> {
     row![
         container(left).width(state.split_x).height(Length::Fill),
         divider,
-        container(right).width(Length::Fill).height(Length::Fill).padding(10),
+        container(right)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(10),
     ]
     .into()
 }
@@ -55,8 +57,12 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
     };
     col = col.push(
         row![
-            button(text(a2l_label).size(13)).on_press(Msg::LoadA2l).width(Length::FillPortion(1)),
-            button(text(bin_label).size(13)).on_press(Msg::LoadBin).width(Length::FillPortion(1)),
+            button(text(a2l_label).size(13))
+                .on_press(Msg::LoadA2l)
+                .width(Length::FillPortion(1)),
+            button(text(bin_label).size(13))
+                .on_press(Msg::LoadBin)
+                .width(Length::FillPortion(1)),
         ]
         .spacing(4),
     );
@@ -71,24 +77,39 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
             "Load BIN 2"
         };
         col = col.push(
-            button(text(bin2_label).size(13)).on_press(Msg::LoadBin2).width(Length::Fill),
+            button(text(bin2_label).size(13))
+                .on_press(Msg::LoadBin2)
+                .width(Length::Fill),
         );
     }
 
     // Show file paths
     if let Some(p) = &state.a2l_path {
-        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = p
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         col = col.push(
-            text(format!("A2L: {name}")).size(11)
-                .color_maybe(None::<Color>)
+            text(format!("A2L: {name}"))
+                .size(11)
+                .color_maybe(None::<Color>),
         );
     }
     if let Some(p) = &state.bin_path {
-        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = p
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         col = col.push(text(format!("BIN 1: {name}")).size(11));
     }
     if let Some(p) = &state.bin2_path {
-        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = p
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         col = col.push(text(format!("BIN 2: {name}")).size(11));
     }
 
@@ -106,20 +127,23 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
     // Show detected module (if a BIN is loaded)
     if state.binary.is_some() {
         col = col.push(
-            container(text(format!("Module: {}", state.module)).size(12))
-                .style(|theme: &Theme| container::Style {
+            container(text(format!("Module: {}", state.module)).size(12)).style(|theme: &Theme| {
+                container::Style {
                     text_color: Some(muted_text(theme)),
                     ..Default::default()
-                })
+                }
+            }),
         );
     }
 
     // ── Compare controls ────────────────────────────────────────────
     if state.binary2.is_some() {
         col = col.push(
-            row![
-                checkbox(state.compare_mode).label("Compare").on_toggle(Msg::ToggleCompare).size(14).text_size(13),
-            ]
+            row![checkbox(state.compare_mode)
+                .label("Compare")
+                .on_toggle(Msg::ToggleCompare)
+                .size(14)
+                .text_size(13),]
             .spacing(8)
             .align_y(Alignment::Center),
         );
@@ -130,13 +154,11 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
                 format!("Changed only ({})", state.changed_set.len())
             };
             col = col.push(
-                row![
-                    checkbox(state.show_changed_only)
-                        .label(changed_label)
-                        .on_toggle(Msg::ToggleChangedOnly)
-                        .size(14)
-                        .text_size(13),
-                ]
+                row![checkbox(state.show_changed_only)
+                    .label(changed_label)
+                    .on_toggle(Msg::ToggleChangedOnly)
+                    .size(14)
+                    .text_size(13),]
                 .spacing(8)
                 .align_y(Alignment::Center),
             );
@@ -148,31 +170,33 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
                 };
                 let rescale_label = format!("Rescale issues only ({rescale_count})");
                 col = col.push(
-                    row![
-                        checkbox(state.show_rescale_only)
-                            .label(rescale_label)
-                            .on_toggle(Msg::ToggleRescaleOnly)
-                            .size(14)
-                            .text_size(13),
-                    ]
+                    row![checkbox(state.show_rescale_only)
+                        .label(rescale_label)
+                        .on_toggle(Msg::ToggleRescaleOnly)
+                        .size(14)
+                        .text_size(13),]
                     .spacing(8)
                     .align_y(Alignment::Center),
                 );
                 if state.show_rescale_only && !state.rescale_uniform.is_empty() {
-                    let uniform_label = format!("Hide uniform ({} hidden)", state.rescale_uniform.len());
+                    let uniform_label =
+                        format!("Hide uniform ({} hidden)", state.rescale_uniform.len());
                     col = col.push(
                         container(
-                            row![
-                                checkbox(state.hide_rescale_uniform)
-                                    .label(uniform_label)
-                                    .on_toggle(Msg::ToggleHideUniform)
-                                    .size(14)
-                                    .text_size(12),
-                            ]
+                            row![checkbox(state.hide_rescale_uniform)
+                                .label(uniform_label)
+                                .on_toggle(Msg::ToggleHideUniform)
+                                .size(14)
+                                .text_size(12),]
                             .spacing(8)
                             .align_y(Alignment::Center),
                         )
-                        .padding(iced::Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 20.0 }),
+                        .padding(iced::Padding {
+                            top: 0.0,
+                            right: 0.0,
+                            bottom: 0.0,
+                            left: 20.0,
+                        }),
                     );
                 }
             }
@@ -183,13 +207,12 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
     if let Some(axis_name) = &state.axis_filter {
         col = col.push(
             row![
-                container(
-                    text(format!("Axis: {axis_name}")).size(12).font(MONO)
-                )
-                .style(|theme: &Theme| container::Style {
-                    text_color: Some(tag_color_curve(theme)),
-                    ..Default::default()
-                }),
+                container(text(format!("Axis: {axis_name}")).size(12).font(MONO)).style(
+                    |theme: &Theme| container::Style {
+                        text_color: Some(tag_color_curve(theme)),
+                        ..Default::default()
+                    }
+                ),
                 button(text("X").size(11)).on_press(Msg::ClearAxisFilter),
             ]
             .spacing(4)
@@ -213,16 +236,14 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
             .spacing(4)
             .align_y(Alignment::Center)
         } else {
-            row![
-                pick_list(
-                    state.categories.clone(),
-                    state.selected_category.clone(),
-                    Msg::CategoryChanged,
-                )
-                .text_size(12)
-                .placeholder("All categories")
-                .width(Length::Fill),
-            ]
+            row![pick_list(
+                state.categories.clone(),
+                state.selected_category.clone(),
+                Msg::CategoryChanged,
+            )
+            .text_size(12)
+            .placeholder("All categories")
+            .width(Length::Fill),]
             .spacing(4)
             .align_y(Alignment::Center)
         };
@@ -244,7 +265,11 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
         let label = if state.total_matches == state.filtered.len() {
             format!("{} characteristics", state.total_matches)
         } else {
-            format!("{} shown / {} matching", state.filtered.len(), state.total_matches)
+            format!(
+                "{} shown / {} matching",
+                state.filtered.len(),
+                state.total_matches
+            )
         };
         col = col.push(text(label).size(11));
     }
@@ -257,7 +282,8 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
             let ch = &a2l.characteristics[idx];
             let is_selected = state.selected == Some(idx);
             let is_changed = show_changed_dot && state.changed_set.contains(&idx);
-            let is_rescale_suspect = show_changed_dot && state.axis_changed_values_same.contains(&idx);
+            let is_rescale_suspect =
+                show_changed_dot && state.axis_changed_values_same.contains(&idx);
             let type_tag = match ch.char_type {
                 CharacteristicType::Value => "V",
                 CharacteristicType::Curve => "C",
@@ -271,72 +297,77 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
             let has_desc = !ch.description.is_empty();
 
             let row_content: Element<'_, Msg> = if is_selected {
-                let mut name_row = row![
-                    text(type_tag).size(11).font(MONO).color(Color::WHITE).width(16),
-                ]
+                let mut name_row = row![text(type_tag)
+                    .size(11)
+                    .font(MONO)
+                    .color(Color::WHITE)
+                    .width(16),]
                 .spacing(4)
                 .align_y(Alignment::Center);
                 if is_rescale_suspect {
-                    name_row = name_row.push(text("!!").size(10).font(MONO).color(Color::from_rgb(1.0, 0.3, 0.6)));
+                    name_row = name_row.push(
+                        text("!!")
+                            .size(10)
+                            .font(MONO)
+                            .color(Color::from_rgb(1.0, 0.3, 0.6)),
+                    );
                 } else if is_changed {
-                    name_row = name_row.push(text("●").size(8).color(Color::from_rgb(1.0, 0.85, 0.4)));
+                    name_row =
+                        name_row.push(text("●").size(8).color(Color::from_rgb(1.0, 0.85, 0.4)));
                 }
                 name_row = name_row.push(text(&ch.name).size(12).color(Color::WHITE));
 
                 let mut item_col = column![name_row].spacing(0);
                 if has_desc {
                     item_col = item_col.push(
-                        text(&ch.description).size(10)
-                            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7))
+                        text(&ch.description)
+                            .size(10)
+                            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)),
                     );
                 }
                 item_col.into()
             } else {
-                let mut name_row = row![
-                    container(text(type_tag).size(11).font(MONO).width(16))
-                        .style(move |theme: &Theme| {
-                            let c = match char_type {
-                                CharacteristicType::Value => tag_color_value(theme),
-                                CharacteristicType::Curve => tag_color_curve(theme),
-                                CharacteristicType::Map => tag_color_map(theme),
-                                _ => tag_color_other(theme),
-                            };
-                            container::Style {
-                                text_color: Some(c),
-                                ..Default::default()
-                            }
-                        }),
-                ]
+                let mut name_row = row![container(text(type_tag).size(11).font(MONO).width(16))
+                    .style(move |theme: &Theme| {
+                        let c = match char_type {
+                            CharacteristicType::Value => tag_color_value(theme),
+                            CharacteristicType::Curve => tag_color_curve(theme),
+                            CharacteristicType::Map => tag_color_map(theme),
+                            _ => tag_color_other(theme),
+                        };
+                        container::Style {
+                            text_color: Some(c),
+                            ..Default::default()
+                        }
+                    }),]
                 .spacing(4)
                 .align_y(Alignment::Center);
                 if is_rescale_suspect {
-                    name_row = name_row.push(
-                        container(text("!!").size(10).font(MONO))
-                            .style(move |theme: &Theme| container::Style {
-                                text_color: Some(rescale_warning_color(theme)),
-                                ..Default::default()
-                            })
-                    );
+                    name_row = name_row.push(container(text("!!").size(10).font(MONO)).style(
+                        move |theme: &Theme| container::Style {
+                            text_color: Some(rescale_warning_color(theme)),
+                            ..Default::default()
+                        },
+                    ));
                 } else if is_changed {
-                    name_row = name_row.push(
-                        container(text("●").size(8))
-                            .style(move |theme: &Theme| container::Style {
+                    name_row =
+                        name_row.push(container(text("●").size(8)).style(move |theme: &Theme| {
+                            container::Style {
                                 text_color: Some(changed_indicator_color(theme)),
                                 ..Default::default()
-                            })
-                    );
+                            }
+                        }));
                 }
                 name_row = name_row.push(text(&ch.name).size(12));
 
                 let mut item_col = column![name_row].spacing(0);
                 if has_desc {
-                    item_col = item_col.push(
-                        container(text(&ch.description).size(10))
-                            .style(|theme: &Theme| container::Style {
-                                text_color: Some(muted_text(theme)),
-                                ..Default::default()
-                            })
-                    );
+                    item_col = item_col.push(container(text(&ch.description).size(10)).style(
+                        |theme: &Theme| container::Style {
+                            text_color: Some(muted_text(theme)),
+                            ..Default::default()
+                        },
+                    ));
                 }
                 item_col.into()
             };
@@ -345,7 +376,11 @@ fn view_left_panel(state: &State) -> Element<'_, Msg> {
             let item = mouse_area(
                 container(row_content)
                     .style(move |_theme: &Theme| container::Style {
-                        background: if is_selected { Some(sel_bg.into()) } else { None },
+                        background: if is_selected {
+                            Some(sel_bg.into())
+                        } else {
+                            None
+                        },
                         ..Default::default()
                     })
                     .padding([3, 4])
@@ -388,11 +423,10 @@ fn view_right_panel(state: &State) -> Element<'_, Msg> {
     col = col.push(text(&ch.name).size(18));
     if !ch.description.is_empty() {
         col = col.push(
-            container(text(&ch.description).size(12))
-                .style(|theme: &Theme| container::Style {
-                    text_color: Some(muted_text(theme)),
-                    ..Default::default()
-                })
+            container(text(&ch.description).size(12)).style(|theme: &Theme| container::Style {
+                text_color: Some(muted_text(theme)),
+                ..Default::default()
+            }),
         );
     }
 
@@ -400,11 +434,12 @@ fn view_right_panel(state: &State) -> Element<'_, Msg> {
     if let Some(cats) = state.char_to_cats.get(&idx) {
         let cat_text = cats.join(", ");
         col = col.push(
-            container(text(format!("Section: {cat_text}")).size(11))
-                .style(|theme: &Theme| container::Style {
+            container(text(format!("Section: {cat_text}")).size(11)).style(|theme: &Theme| {
+                container::Style {
                     text_color: Some(muted_text(theme)),
                     ..Default::default()
-                })
+                }
+            }),
         );
     }
 
@@ -422,7 +457,9 @@ fn view_right_panel(state: &State) -> Element<'_, Msg> {
     let axis_labels = ["X", "Y", "Z"];
     for (ai, ax) in ch.axes.iter().enumerate() {
         if let Some(ref pts_name) = ax.axis_pts_ref {
-            let ax_unit = a2l.compu_methods.get(&ax.compu_method_ref)
+            let ax_unit = a2l
+                .compu_methods
+                .get(&ax.compu_method_ref)
                 .map(|c| c.unit.as_str())
                 .unwrap_or("");
             let label = axis_labels.get(ai).unwrap_or(&"?");
@@ -430,17 +467,16 @@ fn view_right_panel(state: &State) -> Element<'_, Msg> {
             col = col.push(
                 row![
                     text(format!("{label}-axis:")).size(11),
-                    button(
-                        text(pts_name).size(11).font(MONO)
-                    )
-                    .on_press(Msg::FilterByAxis(axis_name))
-                    .padding([1, 6])
-                    .style(button::secondary),
-                    container(text(format!("({ax_unit})")).size(11))
-                        .style(|theme: &Theme| container::Style {
+                    button(text(pts_name).size(11).font(MONO))
+                        .on_press(Msg::FilterByAxis(axis_name))
+                        .padding([1, 6])
+                        .style(button::secondary),
+                    container(text(format!("({ax_unit})")).size(11)).style(|theme: &Theme| {
+                        container::Style {
                             text_color: Some(muted_text(theme)),
                             ..Default::default()
-                        }),
+                        }
+                    }),
                 ]
                 .spacing(6)
                 .align_y(Alignment::Center),
@@ -456,7 +492,11 @@ fn view_right_panel(state: &State) -> Element<'_, Msg> {
         let pct_btn = button(text("%").size(12).font(MONO))
             .on_press(Msg::TogglePercent)
             .padding([2, 8])
-            .style(if state.show_percent { button::primary } else { button::secondary });
+            .style(if state.show_percent {
+                button::primary
+            } else {
+                button::secondary
+            });
         let toolbar = row![
             pct_btn,
             text("P").size(10).color(Color::from_rgb(0.45, 0.45, 0.45)),
@@ -468,14 +508,16 @@ fn view_right_panel(state: &State) -> Element<'_, Msg> {
         // Compare mode
         if state.binary.is_none() {
             col = col.push(
-                container(text("Load firmware binary 1 to view values.").size(13))
-                    .style(|theme: &Theme| container::Style {
+                container(text("Load firmware binary 1 to view values.").size(13)).style(
+                    |theme: &Theme| container::Style {
                         text_color: Some(warning_color(theme)),
                         ..Default::default()
-                    })
+                    },
+                ),
             );
         } else {
-            let is_rescale_suspect = state.selected
+            let is_rescale_suspect = state
+                .selected
                 .map(|i| state.axis_changed_values_same.contains(&i))
                 .unwrap_or(false);
             col = col.push(view_compare(
@@ -491,16 +533,21 @@ fn view_right_panel(state: &State) -> Element<'_, Msg> {
         // Single mode
         if state.binary.is_none() {
             col = col.push(
-                container(text("Load a firmware binary to view values.").size(13))
-                    .style(|theme: &Theme| container::Style {
+                container(text("Load a firmware binary to view values.").size(13)).style(
+                    |theme: &Theme| container::Style {
                         text_color: Some(warning_color(theme)),
                         ..Default::default()
-                    })
+                    },
+                ),
             );
         } else if let Some(values) = &state.cached_values {
             col = col.push(view_values(values, ch, a2l));
         } else {
-            col = col.push(text("Could not read this characteristic.").size(13).color(error_color()));
+            col = col.push(
+                text("Could not read this characteristic.")
+                    .size(13)
+                    .color(error_color()),
+            );
         }
     }
 

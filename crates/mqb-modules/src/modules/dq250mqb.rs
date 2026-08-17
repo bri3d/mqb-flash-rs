@@ -1,17 +1,18 @@
 //! DQ250 MQB (DSG) transmission ECU flash configuration.
 
 use crate::crypto::DsgCrypto;
-use crate::types::{ChecksumKind, ControlModuleIdentifier, FlashInfo};
+use crate::types::{BlockPrep, ChecksumKind, ControlModuleIdentifier, FlashInfo, UdsChecksumKind};
 
 static DSG_CRYPTO: DsgCrypto = DsgCrypto;
 
-const CONTROL_MODULE_IDENTIFIER: ControlModuleIdentifier =
-    ControlModuleIdentifier { rxid: 0x7E9, txid: 0x7E1 };
+const CONTROL_MODULE_IDENTIFIER: ControlModuleIdentifier = ControlModuleIdentifier {
+    rxid: 0x7E9,
+    txid: 0x7E1,
+};
 
 const SA2_SCRIPT: &[u8] = &[
-    0x68, 0x02, 0x81, 0x49, 0x68, 0x05, 0x93, 0xA5, 0x5A, 0x55, 0xAA, 0x4A, 0x05, 0x87, 0x81,
-    0x05, 0x95, 0x26, 0x82, 0x49, 0x84, 0x5A, 0xA5, 0xAA, 0x55, 0x87, 0x03, 0xF7, 0x80, 0x38,
-    0x4C,
+    0x68, 0x02, 0x81, 0x49, 0x68, 0x05, 0x93, 0xA5, 0x5A, 0x55, 0xAA, 0x4A, 0x05, 0x87, 0x81, 0x05,
+    0x95, 0x26, 0x82, 0x49, 0x84, 0x5A, 0xA5, 0xAA, 0x55, 0x87, 0x03, 0xF7, 0x80, 0x38, 0x4C,
 ];
 
 const BLOCK_LENGTHS: &[(u8, usize)] = &[
@@ -20,13 +21,9 @@ const BLOCK_LENGTHS: &[(u8, usize)] = &[
     (4, 0x20000),  // CAL
 ];
 
-const BLOCK_NAMES_FRF: &[(u8, &str)] = &[
-    (2, "FD_2"), (3, "FD_3"), (4, "FD_4"),
-];
+const BLOCK_NAMES_FRF: &[(u8, &str)] = &[(2, "FD_2"), (3, "FD_3"), (4, "FD_4")];
 
-const BLOCK_IDENTIFIERS: &[(u8, u8)] = &[
-    (2, 0x30), (3, 0x50), (4, 0x51),
-];
+const BLOCK_IDENTIFIERS: &[(u8, u8)] = &[(2, 0x30), (3, 0x50), (4, 0x51)];
 
 const BLOCK_CHECKSUMS: &[(u8, [u8; 4])] = &[
     (2, [0xF9, 0x74, 0x17, 0x6E]),
@@ -40,21 +37,14 @@ const SOFTWARE_VERSION_LOCATION: &[(u8, (usize, usize))] = &[
     (4, (0x1FFE0, 0x1FFE4)),
 ];
 
-const BOX_CODE_LOCATION: &[(u8, (usize, usize))] = &[
-    (2, (0x0, 0x0)), (3, (0x0, 0x0)), (4, (0x1FFC0, 0x1FFD3)),
-];
+const BOX_CODE_LOCATION: &[(u8, (usize, usize))] =
+    &[(2, (0x0, 0x0)), (3, (0x0, 0x0)), (4, (0x1FFC0, 0x1FFD3))];
 
-const BLOCK_TRANSFER_SIZES: &[(u8, usize)] = &[
-    (2, 0x4B0), (3, 0x800), (4, 0x800),
-];
+const BLOCK_TRANSFER_SIZES: &[(u8, usize)] = &[(2, 0x4B0), (3, 0x800), (4, 0x800)];
 
-const BINFILE_LAYOUT: &[(u8, usize)] = &[
-    (2, 0x000000), (3, 0x050000), (4, 0x030000),
-];
+const BINFILE_LAYOUT: &[(u8, usize)] = &[(2, 0x000000), (3, 0x050000), (4, 0x030000)];
 
-const BLOCK_NAME_TO_NUMBER: &[(&str, u8)] = &[
-    ("DRIVER", 2), ("ASW", 3), ("CAL", 4),
-];
+const BLOCK_NAME_TO_NUMBER: &[(&str, u8)] = &[("DRIVER", 2), ("ASW", 3), ("CAL", 4)];
 
 pub static DQ250_FLASH_INFO: FlashInfo = FlashInfo {
     base_addresses: &[], // DSG has no base address relative calculations
@@ -77,4 +67,11 @@ pub static DQ250_FLASH_INFO: FlashInfo = FlashInfo {
     checksum_kind: ChecksumKind::Dsg,
     lzss10_odx: true,
     dynamic_block_length_offsets: &[],
+    compression_type: 0x01,
+    encryption_type: 0x01,
+    block_prep: BlockPrep::LzssNone,
+    no_erase_max_block: 2,
+    uds_checksum_kind: UdsChecksumKind::Static,
+    default_stmin_us: 900,
+    no_internal_checksum_blocks: &[2],
 };

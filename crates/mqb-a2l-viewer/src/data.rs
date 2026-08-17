@@ -5,21 +5,21 @@ use mqb_a2l::A2lFile;
 
 /// Known Simos18 address map: (base_addr, file_offset, block_length).
 const SIMOS18_MAP: &[(u32, usize, usize)] = &[
-    (0x80000000, 0x000000, 0x01C000),  // SBOOT
-    (0x8001C000, 0x01C000, 0x023E00),  // CBOOT
-    (0x80040000, 0x040000, 0x0FFC00),  // ASW1
-    (0x80140000, 0x140000, 0x0BFC00),  // ASW2
-    (0x80880000, 0x280000, 0x07FC00),  // ASW3
-    (0xA0800000, 0x200000, 0x07FC00),  // CAL
+    (0x80000000, 0x000000, 0x01C000), // SBOOT
+    (0x8001C000, 0x01C000, 0x023E00), // CBOOT
+    (0x80040000, 0x040000, 0x0FFC00), // ASW1
+    (0x80140000, 0x140000, 0x0BFC00), // ASW2
+    (0x80880000, 0x280000, 0x07FC00), // ASW3
+    (0xA0800000, 0x200000, 0x07FC00), // CAL
 ];
 
 /// Simos18.10 address map — different base addresses and file layout.
 const SIMOS1810_MAP: &[(u32, usize, usize)] = &[
-    (0x80800000, 0x200000, 0x01FE00),  // CBOOT
-    (0x80020000, 0x020000, 0x0DFC00),  // ASW1
-    (0x80100000, 0x100000, 0x0FFC00),  // ASW2
-    (0x808C0000, 0x2C0000, 0x13FC00),  // ASW3
-    (0xA0820000, 0x220000, 0x09FC00),  // CAL
+    (0x80800000, 0x200000, 0x01FE00), // CBOOT
+    (0x80020000, 0x020000, 0x0DFC00), // ASW1
+    (0x80100000, 0x100000, 0x0FFC00), // ASW2
+    (0x808C0000, 0x2C0000, 0x13FC00), // ASW3
+    (0xA0820000, 0x220000, 0x09FC00), // CAL
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,15 +93,15 @@ pub fn build_categories(a2l: &A2lFile) -> (Vec<Category>, HashMap<usize, Vec<Str
     // 1. Collect sub-function children for each parent
     let mut parent_children: HashMap<&str, Vec<&str>> = HashMap::new();
     let mut is_child: HashSet<&str> = HashSet::new();
-    let func_map: HashMap<&str, &mqb_a2l::Function> = a2l.functions.iter()
-        .map(|f| (f.name.as_str(), f))
-        .collect();
+    let func_map: HashMap<&str, &mqb_a2l::Function> =
+        a2l.functions.iter().map(|f| (f.name.as_str(), f)).collect();
 
     for func in &a2l.functions {
         if !func.sub_functions.is_empty() {
             for child_name in &func.sub_functions {
                 is_child.insert(child_name.as_str());
-                parent_children.entry(&func.name)
+                parent_children
+                    .entry(&func.name)
                     .or_default()
                     .push(child_name.as_str());
             }
@@ -109,7 +109,9 @@ pub fn build_categories(a2l: &A2lFile) -> (Vec<Category>, HashMap<usize, Vec<Str
     }
 
     // 2. Build char_name → index lookup
-    let char_idx: HashMap<&str, usize> = a2l.characteristics.iter()
+    let char_idx: HashMap<&str, usize> = a2l
+        .characteristics
+        .iter()
         .enumerate()
         .map(|(i, c)| (c.name.as_str(), i))
         .collect();
@@ -121,7 +123,11 @@ pub fn build_categories(a2l: &A2lFile) -> (Vec<Category>, HashMap<usize, Vec<Str
     // Helper: collect chars from a function into a set
     let collect_func_chars = |func_name: &str, set: &mut HashSet<usize>| {
         if let Some(func) = func_map.get(func_name) {
-            for cname in func.def_characteristics.iter().chain(func.ref_characteristics.iter()) {
+            for cname in func
+                .def_characteristics
+                .iter()
+                .chain(func.ref_characteristics.iter())
+            {
                 if let Some(&idx) = char_idx.get(cname.as_str()) {
                     set.insert(idx);
                 }
@@ -144,7 +150,8 @@ pub fn build_categories(a2l: &A2lFile) -> (Vec<Category>, HashMap<usize, Vec<Str
     // Also include leaf functions that aren't children of any parent as their own category
     for func in &a2l.functions {
         if func.sub_functions.is_empty() && !is_child.contains(func.name.as_str()) {
-            let has_chars = !func.def_characteristics.is_empty() || !func.ref_characteristics.is_empty();
+            let has_chars =
+                !func.def_characteristics.is_empty() || !func.ref_characteristics.is_empty();
             if has_chars {
                 let set = cat_chars.entry(func.name.clone()).or_default();
                 collect_func_chars(&func.name, set);
@@ -153,12 +160,12 @@ pub fn build_categories(a2l: &A2lFile) -> (Vec<Category>, HashMap<usize, Vec<Str
     }
 
     // 4. Build sorted category list (only categories with chars)
-    let mut categories: Vec<Category> = cat_chars.keys()
-        .filter(|name| {
-            cat_chars.get(*name).map(|s| !s.is_empty()).unwrap_or(false)
-        })
+    let mut categories: Vec<Category> = cat_chars
+        .keys()
+        .filter(|name| cat_chars.get(*name).map(|s| !s.is_empty()).unwrap_or(false))
         .map(|name| {
-            let desc = func_map.get(name.as_str())
+            let desc = func_map
+                .get(name.as_str())
                 .map(|f| f.description.as_str())
                 .unwrap_or("");
             let label = if desc.is_empty() {
@@ -166,7 +173,10 @@ pub fn build_categories(a2l: &A2lFile) -> (Vec<Category>, HashMap<usize, Vec<Str
             } else {
                 format!("{name} — {desc}")
             };
-            Category { label, name: name.clone() }
+            Category {
+                label,
+                name: name.clone(),
+            }
         })
         .collect();
     categories.sort_by(|a, b| a.name.cmp(&b.name));

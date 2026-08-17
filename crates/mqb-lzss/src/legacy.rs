@@ -15,7 +15,11 @@
 //! - Otherwise: copy literal byte.
 
 fn fill_bits(count: u8) -> u16 {
-    if count >= 16 { !0 } else { (1u16 << count) - 1 }
+    if count >= 16 {
+        !0
+    } else {
+        (1u16 << count) - 1
+    }
 }
 
 /// Decompress a LegacySimos-compressed block.

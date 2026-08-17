@@ -31,21 +31,15 @@ pub fn view_scalar<'a>(v: f64, ch: &'a Characteristic, a2l: &'a A2lFile) -> Elem
 
     if let Some(cm) = cm {
         if let Some(label) = cm.conversion.to_verbal(v as i64, &a2l.compu_vtabs) {
-            return column![
-                text(format!("{} (raw: {})", label, v as i64)).size(20),
-            ].into();
+            return column![text(format!("{} (raw: {})", label, v as i64)).size(20),].into();
         }
     }
 
-    column![
-        text(format!("{:.6} {}", v, unit)).size(20),
-    ].into()
+    column![text(format!("{:.6} {}", v, unit)).size(20),].into()
 }
 
 pub fn view_ascii<'a>(s: &'a str) -> Element<'a, Msg> {
-    column![
-        text(format!("\"{}\"", s)).size(16).font(MONO),
-    ].into()
+    column![text(format!("\"{}\"", s)).size(16).font(MONO),].into()
 }
 
 pub fn view_curve<'a>(
@@ -56,7 +50,9 @@ pub fn view_curve<'a>(
 ) -> Element<'a, Msg> {
     let cm = a2l.compu_methods.get(&ch.compu_method_ref);
     let val_unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
-    let axis_unit = ch.axes.first()
+    let axis_unit = ch
+        .axes
+        .first()
         .and_then(|ax| a2l.compu_methods.get(&ax.compu_method_ref))
         .map(|c| c.unit.as_str())
         .unwrap_or("");
@@ -65,8 +61,14 @@ pub fn view_curve<'a>(
 
     col = col.push(
         row![
-            text(format!("X ({axis_unit})")).size(12).width(120).font(MONO),
-            text(format!("Y ({val_unit})")).size(12).width(120).font(MONO),
+            text(format!("X ({axis_unit})"))
+                .size(12)
+                .width(120)
+                .font(MONO),
+            text(format!("Y ({val_unit})"))
+                .size(12)
+                .width(120)
+                .font(MONO),
         ]
         .spacing(4),
     );
@@ -100,10 +102,12 @@ pub fn view_map<'a>(
     col = col.push(map_table(x, y, z, ch.lower_limit, ch.upper_limit));
     col = col.push(iced::widget::Space::new().width(0).height(14));
 
-    scrollable(col).direction(scrollable::Direction::Both {
-        vertical: scrollable::Scrollbar::new(),
-        horizontal: scrollable::Scrollbar::new(),
-    }).into()
+    scrollable(col)
+        .direction(scrollable::Direction::Both {
+            vertical: scrollable::Scrollbar::new(),
+            horizontal: scrollable::Scrollbar::new(),
+        })
+        .into()
 }
 
 pub fn view_cuboid<'a>(
@@ -116,34 +120,39 @@ pub fn view_cuboid<'a>(
 ) -> Element<'a, Msg> {
     let cm = a2l.compu_methods.get(&ch.compu_method_ref);
     let val_unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
-    let z_unit = ch.axes.get(2)
+    let z_unit = ch
+        .axes
+        .get(2)
         .and_then(|ax| a2l.compu_methods.get(&ax.compu_method_ref))
         .map(|c| c.unit.as_str())
         .unwrap_or("");
 
     let mut col = column![].spacing(8);
-    col = col.push(text(format!(
-        "{}x{}x{} cuboid (unit: {val_unit})",
-        x.len(), y.len(), z.len()
-    )).size(12));
+    col = col.push(
+        text(format!(
+            "{}x{}x{} cuboid (unit: {val_unit})",
+            x.len(),
+            y.len(),
+            z.len()
+        ))
+        .size(12),
+    );
 
     for (zi, zv) in z.iter().enumerate() {
         let Some(slice) = w.get(zi) else { continue };
 
         col = col.push(
-            container(
-                text(format!("Z[{zi}] = {} {z_unit}", format_val(*zv))).size(13)
-            )
-            .style(|theme: &Theme| {
-                let (bg, fg) = map_header_colors(theme);
-                container::Style {
-                    background: Some(bg.into()),
-                    text_color: Some(fg),
-                    ..Default::default()
-                }
-            })
-            .padding([2, 6])
-            .width(Length::Fill)
+            container(text(format!("Z[{zi}] = {} {z_unit}", format_val(*zv))).size(13))
+                .style(|theme: &Theme| {
+                    let (bg, fg) = map_header_colors(theme);
+                    container::Style {
+                        background: Some(bg.into()),
+                        text_color: Some(fg),
+                        ..Default::default()
+                    }
+                })
+                .padding([2, 6])
+                .width(Length::Fill),
         );
 
         col = col.push(map_table(x, y, slice, ch.lower_limit, ch.upper_limit));
@@ -151,10 +160,12 @@ pub fn view_cuboid<'a>(
 
     col = col.push(iced::widget::Space::new().width(0).height(14));
 
-    scrollable(col).direction(scrollable::Direction::Both {
-        vertical: scrollable::Scrollbar::new(),
-        horizontal: scrollable::Scrollbar::new(),
-    }).into()
+    scrollable(col)
+        .direction(scrollable::Direction::Both {
+            vertical: scrollable::Scrollbar::new(),
+            horizontal: scrollable::Scrollbar::new(),
+        })
+        .into()
 }
 
 pub fn view_val_blk<'a>(
@@ -165,7 +176,9 @@ pub fn view_val_blk<'a>(
     let cm = a2l.compu_methods.get(&ch.compu_method_ref);
     let unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
 
-    let is_verbal = cm.map(|c| matches!(c.conversion, mqb_a2l::Conversion::TabVerb { .. })).unwrap_or(false);
+    let is_verbal = cm
+        .map(|c| matches!(c.conversion, mqb_a2l::Conversion::TabVerb { .. }))
+        .unwrap_or(false);
 
     let mut col = column![].spacing(2);
     col = col.push(text(format!("{} values (unit: {unit})", vals.len())).size(12));
@@ -173,7 +186,8 @@ pub fn view_val_blk<'a>(
     for (i, v) in vals.iter().enumerate() {
         let label = if is_verbal {
             if let Some(cm) = cm {
-                cm.conversion.to_verbal(*v as i64, &a2l.compu_vtabs)
+                cm.conversion
+                    .to_verbal(*v as i64, &a2l.compu_vtabs)
                     .map(|s| format!("[{i}] {s} ({})", *v as i64))
             } else {
                 None

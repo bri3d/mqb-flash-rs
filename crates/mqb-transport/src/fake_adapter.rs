@@ -90,12 +90,12 @@ enum Responder {
 /// Fixture entries use raw UDS PDU bytes; ISO-TP fragmentation and
 /// reassembly are handled internally.
 pub struct FakeCanAdapter {
-    responder:      Responder,
-    rx_queue:       VecDeque<Frame>,
+    responder: Responder,
+    rx_queue: VecDeque<Frame>,
     /// CAN ID used for ECU→tester frames we fabricate (FC, auto-responses).
-    ecu_tx_id:      u32,
+    ecu_tx_id: u32,
     /// ISO-TP reassembly state for an ongoing multi-frame tester message.
-    isotp_pending:  Option<Reassembler>,
+    isotp_pending: Option<Reassembler>,
 }
 
 impl FakeCanAdapter {
@@ -141,7 +141,9 @@ impl FakeCanAdapter {
 
         if sid == 0x36 {
             let counter = uds.get(1).copied().unwrap_or(0);
-            tracing::trace!("FakeCanAdapter: auto-responding to TransferData counter=0x{counter:02X}");
+            tracing::trace!(
+                "FakeCanAdapter: auto-responding to TransferData counter=0x{counter:02X}"
+            );
             self.enqueue_uds_response(&[0x76, counter]);
             return;
         }
@@ -294,14 +296,14 @@ fn parse_fixture(content: &str) -> (bool, Vec<FixtureEntry>) {
             continue;
         }
         let mut parts = line.splitn(3, ' ');
-        let dir_str  = parts.next().unwrap_or("");
-        let id_str   = parts.next().unwrap_or("");
+        let dir_str = parts.next().unwrap_or("");
+        let id_str = parts.next().unwrap_or("");
         let data_str = parts.next().unwrap_or("");
 
         let direction = match dir_str {
             "T" => Direction::Tx,
             "R" => Direction::Rx,
-            _   => continue,
+            _ => continue,
         };
         let id: u32 = match u32::from_str_radix(id_str, 16) {
             Ok(v) => v,
@@ -365,7 +367,9 @@ impl CanAdapter for FakeCanAdapter {
 
                     // Auto-respond with ClearToSend flow control.
                     let fc_data = [0x30u8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-                    if let Ok(fc) = Frame::new(frame.bus, Identifier::from(self.ecu_tx_id), &fc_data) {
+                    if let Ok(fc) =
+                        Frame::new(frame.bus, Identifier::from(self.ecu_tx_id), &fc_data)
+                    {
                         self.rx_queue.push_back(fc);
                     }
 
@@ -450,28 +454,49 @@ mod tests {
              R 7E8 62 f1 9e 42\n",
         );
         let map = build_response_map(entries);
-        assert_eq!(map.get(&vec![0x22, 0xF1, 0x90]).unwrap(), &[vec![0x62, 0xF1, 0x90, 0x41]]);
-        assert_eq!(map.get(&vec![0x22, 0xF1, 0x9E]).unwrap(), &[vec![0x62, 0xF1, 0x9E, 0x42]]);
+        assert_eq!(
+            map.get(&vec![0x22, 0xF1, 0x90]).unwrap(),
+            &[vec![0x62, 0xF1, 0x90, 0x41]]
+        );
+        assert_eq!(
+            map.get(&vec![0x22, 0xF1, 0x9E]).unwrap(),
+            &[vec![0x62, 0xF1, 0x9E, 0x42]]
+        );
     }
 
     #[test]
     fn synth_covers_generic_services() {
-        assert_eq!(synth_uds_response(&[0x10, 0x03]), vec![0x50, 0x03, 0x00, 0x32, 0x01, 0xF4]);
+        assert_eq!(
+            synth_uds_response(&[0x10, 0x03]),
+            vec![0x50, 0x03, 0x00, 0x32, 0x01, 0xF4]
+        );
         assert_eq!(synth_uds_response(&[0x3E, 0x00]), vec![0x7E, 0x00]);
         assert_eq!(synth_uds_response(&[0x14, 0xFF, 0xFF, 0xFF]), vec![0x54]);
-        assert_eq!(synth_uds_response(&[0x2E, 0x12, 0x34, 0xAA]), vec![0x6E, 0x12, 0x34]);
+        assert_eq!(
+            synth_uds_response(&[0x2E, 0x12, 0x34, 0xAA]),
+            vec![0x6E, 0x12, 0x34]
+        );
         assert_eq!(
             synth_uds_response(&[0x2F, 0x12, 0x34, 0x03, 0x01]),
             vec![0x6F, 0x12, 0x34, 0x03, 0x01],
         );
-        assert_eq!(synth_uds_response(&[0x31, 0x01, 0x02, 0x03]), vec![0x71, 0x01, 0x02, 0x03]);
+        assert_eq!(
+            synth_uds_response(&[0x31, 0x01, 0x02, 0x03]),
+            vec![0x71, 0x01, 0x02, 0x03]
+        );
         // SecurityAccess: requestSeed (odd) → seed; sendKey (even) → accepted.
-        assert_eq!(synth_uds_response(&[0x27, 0x03]), vec![0x67, 0x03, 0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(
+            synth_uds_response(&[0x27, 0x03]),
+            vec![0x67, 0x03, 0x01, 0x02, 0x03, 0x04]
+        );
         assert_eq!(
             synth_uds_response(&[0x27, 0x04, 0xDE, 0xAD, 0xBE, 0xEF]),
             vec![0x67, 0x04],
         );
         // Unknown read → requestOutOfRange.
-        assert_eq!(synth_uds_response(&[0x22, 0xAB, 0xCD]), vec![0x7F, 0x22, 0x31]);
+        assert_eq!(
+            synth_uds_response(&[0x22, 0xAB, 0xCD]),
+            vec![0x7F, 0x22, 0x31]
+        );
     }
 }

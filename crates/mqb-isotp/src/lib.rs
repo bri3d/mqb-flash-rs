@@ -29,10 +29,7 @@ pub fn fragment(uds: &[u8], id: u32) -> Vec<Frame> {
     let total = uds.len();
 
     // First Frame: [0x1H, 0xLL, payload[0..6]]
-    let mut ff = vec![
-        0x10u8 | (((total >> 8) & 0x0F) as u8),
-        (total & 0xFF) as u8,
-    ];
+    let mut ff = vec![0x10u8 | (((total >> 8) & 0x0F) as u8), (total & 0xFF) as u8];
     ff.extend_from_slice(&uds[..6.min(total)]);
     ff.resize(8, 0x00);
     if let Ok(f) = Frame::new(0, Identifier::from(id), &ff) {

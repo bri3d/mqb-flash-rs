@@ -7,14 +7,14 @@
 //! - **DSG JAMCRC**: `0xFFFFFFFF - crc32(data[..-4])`, stored little-endian
 //! - **Haldex 16-bit**: NOT of u16 LE word sum, stored at fixed offset
 
-mod simos_crc;
-mod ecm3;
 mod dq381;
 mod dsg;
+mod ecm3;
 mod haldex;
+mod simos_crc;
 
-pub use simos_crc::{crc32_simos, validate_simos, validate_simos_block};
-pub use ecm3::{validate_ecm3, locate_ecm3_with_asw1, load_ecm3_location};
 pub use dq381::validate_dq381;
 pub use dsg::validate_dsg;
+pub use ecm3::{load_ecm3_location, locate_ecm3_with_asw1, validate_ecm3};
 pub use haldex::validate_haldex;
+pub use simos_crc::{crc32_simos, validate_simos, validate_simos_block};

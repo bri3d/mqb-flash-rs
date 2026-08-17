@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use mqb_a2l::reader::{AddressMap, CharacteristicValues, make_resolver, read_characteristic};
+use mqb_a2l::reader::{make_resolver, read_characteristic, AddressMap, CharacteristicValues};
 use mqb_a2l::A2lFile;
 
-use crate::data::{Category, ModulePreset, address_map_for};
+use crate::data::{address_map_for, Category, ModulePreset};
 use crate::MAX_DISPLAY;
 
 pub struct State {
@@ -132,25 +132,40 @@ impl State {
             .filter(|(i, c)| {
                 // Category filter
                 if let Some(cat_name) = cat_filter {
-                    let in_cat = self.char_to_cats.get(i)
+                    let in_cat = self
+                        .char_to_cats
+                        .get(i)
                         .map(|cats| cats.iter().any(|cn| cn == cat_name))
                         .unwrap_or(false);
-                    if !in_cat { return false; }
+                    if !in_cat {
+                        return false;
+                    }
                 }
                 // Changed-only filter
-                if self.show_changed_only && !self.changed_set.is_empty()
-                    && !self.changed_set.contains(i) { return false; }
+                if self.show_changed_only
+                    && !self.changed_set.is_empty()
+                    && !self.changed_set.contains(i)
+                {
+                    return false;
+                }
                 // Rescale-only filter
                 if self.show_rescale_only && !self.axis_changed_values_same.is_empty() {
-                    if !self.axis_changed_values_same.contains(i) { return false; }
-                    if self.hide_rescale_uniform && self.rescale_uniform.contains(i) { return false; }
+                    if !self.axis_changed_values_same.contains(i) {
+                        return false;
+                    }
+                    if self.hide_rescale_uniform && self.rescale_uniform.contains(i) {
+                        return false;
+                    }
                 }
                 // Axis name filter
                 if let Some(axis_name) = axis_filter {
-                    let has_axis = c.axes.iter().any(|ax| {
-                        ax.axis_pts_ref.as_deref() == Some(axis_name)
-                    });
-                    if !has_axis { return false; }
+                    let has_axis = c
+                        .axes
+                        .iter()
+                        .any(|ax| ax.axis_pts_ref.as_deref() == Some(axis_name));
+                    if !has_axis {
+                        return false;
+                    }
                 }
                 // Text filter
                 filt.is_empty()
@@ -181,12 +196,21 @@ impl State {
 
     /// Move selection to next/prev item in filtered list.
     pub fn move_selection(&mut self, delta: isize) {
-        if self.filtered.is_empty() { return; }
-        let current_pos = self.selected
+        if self.filtered.is_empty() {
+            return;
+        }
+        let current_pos = self
+            .selected
             .and_then(|sel| self.filtered.iter().position(|&i| i == sel));
         let new_pos = match current_pos {
             Some(pos) => (pos as isize + delta).clamp(0, self.filtered.len() as isize - 1) as usize,
-            None => if delta > 0 { 0 } else { self.filtered.len() - 1 },
+            None => {
+                if delta > 0 {
+                    0
+                } else {
+                    self.filtered.len() - 1
+                }
+            }
         };
         self.selected = Some(self.filtered[new_pos]);
         self.read_selected();

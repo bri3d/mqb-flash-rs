@@ -6,7 +6,7 @@ use iced::mouse;
 use iced::widget::scrollable::RelativeOffset;
 use iced::{keyboard, Subscription, Task};
 
-use mqb_a2l::reader::{CharacteristicValues, make_resolver, read_characteristic};
+use mqb_a2l::reader::{make_resolver, read_characteristic, CharacteristicValues};
 use mqb_a2l::A2lFile;
 
 use crate::data::{address_map_for, build_categories, detect_module_from_bin};
@@ -17,7 +17,9 @@ pub fn subscription(state: &State) -> Subscription<Msg> {
         keyboard::Event::KeyPressed { key, .. } => match key {
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Msg::SelectNext),
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Msg::SelectPrev),
-            keyboard::Key::Character(c) if c.as_str() == "p" || c.as_str() == "P" => Some(Msg::TogglePercent),
+            keyboard::Key::Character(c) if c.as_str() == "p" || c.as_str() == "P" => {
+                Some(Msg::TogglePercent)
+            }
             _ => None,
         },
         _ => None,
@@ -208,7 +210,11 @@ pub fn update(state: &mut State, msg: Msg) -> Task<Msg> {
             state.show_changed_only = on;
             state.rebuild_filter();
         }
-        Msg::ChangedSetComputed { changed, axis_changed_values_same, rescale_uniform } => {
+        Msg::ChangedSetComputed {
+            changed,
+            axis_changed_values_same,
+            rescale_uniform,
+        } => {
             state.changed_set = changed;
             state.axis_changed_values_same = axis_changed_values_same;
             state.rescale_uniform = rescale_uniform;
@@ -250,18 +256,32 @@ pub fn update(state: &mut State, msg: Msg) -> Task<Msg> {
 
 /// Scroll the characteristic list so the selected item is visible.
 fn scroll_to_selected(state: &State) -> Task<Msg> {
-    let Some(sel) = state.selected else { return Task::none() };
-    let Some(pos) = state.filtered.iter().position(|&i| i == sel) else { return Task::none() };
+    let Some(sel) = state.selected else {
+        return Task::none();
+    };
+    let Some(pos) = state.filtered.iter().position(|&i| i == sel) else {
+        return Task::none();
+    };
     let len = state.filtered.len();
-    let y = if len <= 1 { 0.0 } else { pos as f32 / (len - 1) as f32 };
+    let y = if len <= 1 {
+        0.0
+    } else {
+        pos as f32 / (len - 1) as f32
+    };
     iced::widget::operation::snap_to(crate::CHAR_LIST_ID, RelativeOffset { x: 0.0, y })
 }
 
 /// Kick off background computation of changed characteristic indices.
 fn maybe_compute_changes(state: &mut State) -> Task<Msg> {
-    let Some(a2l) = &state.a2l else { return Task::none() };
-    let Some(bin1) = &state.binary else { return Task::none() };
-    let Some(bin2) = &state.binary2 else { return Task::none() };
+    let Some(a2l) = &state.a2l else {
+        return Task::none();
+    };
+    let Some(bin1) = &state.binary else {
+        return Task::none();
+    };
+    let Some(bin2) = &state.binary2 else {
+        return Task::none();
+    };
 
     state.computing_changes = true;
     state.changed_set.clear();
@@ -274,9 +294,7 @@ fn maybe_compute_changes(state: &mut State) -> Task<Msg> {
     let map = state.address_map.clone();
 
     Task::perform(
-        async move {
-            compute_changed_set(&a2l, &bin1, &bin2, &map)
-        },
+        async move { compute_changed_set(&a2l, &bin1, &bin2, &map) },
         |(changed, axis_changed_values_same, rescale_uniform)| Msg::ChangedSetComputed {
             changed,
             axis_changed_values_same,
@@ -310,7 +328,9 @@ fn compute_changed_set(
                     }
                 }
             }
-            (None, Some(_)) | (Some(_), None) => { changed.insert(i); }
+            (None, Some(_)) | (Some(_), None) => {
+                changed.insert(i);
+            }
             _ => {}
         }
     }
@@ -321,9 +341,7 @@ fn compute_changed_set(
 /// are the same value — e.g. a table of all 1.0 (likely a placeholder).
 fn has_uniform_data_values(v: &CharacteristicValues) -> bool {
     match v {
-        CharacteristicValues::Curve { y, .. } => {
-            y.len() > 1 && y.iter().all(|&val| val == y[0])
-        }
+        CharacteristicValues::Curve { y, .. } => y.len() > 1 && y.iter().all(|&val| val == y[0]),
         CharacteristicValues::Map { z, .. } => {
             let first = z.first().and_then(|r| r.first()).copied();
             if let Some(f) = first {
@@ -333,12 +351,14 @@ fn has_uniform_data_values(v: &CharacteristicValues) -> bool {
             }
         }
         CharacteristicValues::Cuboid { w, .. } => {
-            let first = w.first()
+            let first = w
+                .first()
                 .and_then(|s| s.first())
                 .and_then(|r| r.first())
                 .copied();
             if let Some(f) = first {
-                w.iter().all(|slice| slice.iter().all(|row| row.iter().all(|&val| val == f)))
+                w.iter()
+                    .all(|slice| slice.iter().all(|row| row.iter().all(|&val| val == f)))
             } else {
                 false
             }
@@ -356,12 +376,30 @@ fn has_axis_change_without_rescale(a: &CharacteristicValues, b: &CharacteristicV
             CharacteristicValues::Curve { x: x2, y: y2 },
         ) => x1 != x2 && y1 == y2,
         (
-            CharacteristicValues::Map { x: x1, y: y1, z: z1 },
-            CharacteristicValues::Map { x: x2, y: y2, z: z2 },
+            CharacteristicValues::Map {
+                x: x1,
+                y: y1,
+                z: z1,
+            },
+            CharacteristicValues::Map {
+                x: x2,
+                y: y2,
+                z: z2,
+            },
         ) => (x1 != x2 || y1 != y2) && z1 == z2,
         (
-            CharacteristicValues::Cuboid { x: x1, y: y1, z: z1, w: w1 },
-            CharacteristicValues::Cuboid { x: x2, y: y2, z: z2, w: w2 },
+            CharacteristicValues::Cuboid {
+                x: x1,
+                y: y1,
+                z: z1,
+                w: w1,
+            },
+            CharacteristicValues::Cuboid {
+                x: x2,
+                y: y2,
+                z: z2,
+                w: w2,
+            },
         ) => (x1 != x2 || y1 != y2 || z1 != z2) && w1 == w2,
         _ => false,
     }

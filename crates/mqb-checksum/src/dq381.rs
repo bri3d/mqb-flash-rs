@@ -4,9 +4,9 @@
 //! Checksum stored at offset 0x44 (big-endian u32).
 //! Addresses are subtracted from the block's base address to get file offsets.
 
-use std::borrow::Cow;
 use mqb_bytes::{read_u32_be, write_u32_be};
 use mqb_modules::ChecksumState;
+use std::borrow::Cow;
 
 /// Validate (and optionally fix) a DQ381 block CRC32 checksum.
 ///

@@ -26,13 +26,25 @@ pub fn warning_color(theme: &Theme) -> Color {
 }
 
 pub fn tag_color_value(theme: &Theme) -> Color {
-    if is_dark(theme) { Color::from_rgb(0.5, 0.85, 0.5) } else { Color::from_rgb(0.3, 0.55, 0.3) }
+    if is_dark(theme) {
+        Color::from_rgb(0.5, 0.85, 0.5)
+    } else {
+        Color::from_rgb(0.3, 0.55, 0.3)
+    }
 }
 pub fn tag_color_curve(theme: &Theme) -> Color {
-    if is_dark(theme) { Color::from_rgb(0.5, 0.7, 1.0) } else { Color::from_rgb(0.2, 0.4, 0.7) }
+    if is_dark(theme) {
+        Color::from_rgb(0.5, 0.7, 1.0)
+    } else {
+        Color::from_rgb(0.2, 0.4, 0.7)
+    }
 }
 pub fn tag_color_map(theme: &Theme) -> Color {
-    if is_dark(theme) { Color::from_rgb(1.0, 0.6, 0.4) } else { Color::from_rgb(0.7, 0.35, 0.2) }
+    if is_dark(theme) {
+        Color::from_rgb(1.0, 0.6, 0.4)
+    } else {
+        Color::from_rgb(0.7, 0.35, 0.2)
+    }
 }
 pub fn tag_color_other(theme: &Theme) -> Color {
     muted_text(theme)
@@ -69,18 +81,32 @@ pub fn map_cell_colors(intensity: f32, theme: &Theme) -> (Color, Color) {
 /// Row-header background + text for map Y-axis labels.
 pub fn map_header_colors(theme: &Theme) -> (Color, Color) {
     if is_dark(theme) {
-        (Color::from_rgb(0.2, 0.2, 0.25), Color::from_rgb(0.8, 0.8, 0.85))
+        (
+            Color::from_rgb(0.2, 0.2, 0.25),
+            Color::from_rgb(0.8, 0.8, 0.85),
+        )
     } else {
-        (Color::from_rgb(0.90, 0.90, 0.93), Color::from_rgb(0.1, 0.1, 0.1))
+        (
+            Color::from_rgb(0.90, 0.90, 0.93),
+            Color::from_rgb(0.1, 0.1, 0.1),
+        )
     }
 }
 
 /// Color for diff percentage text.
 pub fn diff_pct_color(pct: f64, theme: &Theme) -> Color {
     if pct > 0.001 {
-        if is_dark(theme) { Color::from_rgb(1.0, 0.5, 0.4) } else { Color::from_rgb(0.8, 0.15, 0.1) }
+        if is_dark(theme) {
+            Color::from_rgb(1.0, 0.5, 0.4)
+        } else {
+            Color::from_rgb(0.8, 0.15, 0.1)
+        }
     } else if pct < -0.001 {
-        if is_dark(theme) { Color::from_rgb(0.4, 0.9, 0.5) } else { Color::from_rgb(0.1, 0.55, 0.2) }
+        if is_dark(theme) {
+            Color::from_rgb(0.4, 0.9, 0.5)
+        } else {
+            Color::from_rgb(0.1, 0.55, 0.2)
+        }
     } else {
         muted_text(theme)
     }
@@ -118,28 +144,46 @@ pub fn diff_cell_colors(pct_change: f64, theme: &Theme) -> (Color, Color) {
             );
             (bg, fg)
         } else {
-            (Color::from_rgb(0.15, 0.15, 0.18), Color::from_rgb(0.6, 0.6, 0.6))
+            (
+                Color::from_rgb(0.15, 0.15, 0.18),
+                Color::from_rgb(0.6, 0.6, 0.6),
+            )
         }
     } else if pct_change > 0.001 {
         let bg = Color::from_rgb(1.0, 0.92 - 0.25 * intensity, 0.90 - 0.30 * intensity);
         (bg, Color::from_rgb(0.1, 0.1, 0.1))
     } else if pct_change < -0.001 {
-        let bg = Color::from_rgb(0.90 - 0.15 * intensity, 1.0 - 0.05 * intensity, 0.90 - 0.15 * intensity);
+        let bg = Color::from_rgb(
+            0.90 - 0.15 * intensity,
+            1.0 - 0.05 * intensity,
+            0.90 - 0.15 * intensity,
+        );
         (bg, Color::from_rgb(0.1, 0.1, 0.1))
     } else {
-        (Color::from_rgb(0.96, 0.96, 0.96), Color::from_rgb(0.4, 0.4, 0.4))
+        (
+            Color::from_rgb(0.96, 0.96, 0.96),
+            Color::from_rgb(0.4, 0.4, 0.4),
+        )
     }
 }
 
 /// Small colored dot for the characteristic list to indicate changed items.
 pub fn changed_indicator_color(theme: &Theme) -> Color {
-    if is_dark(theme) { Color::from_rgb(1.0, 0.7, 0.2) } else { Color::from_rgb(0.9, 0.55, 0.0) }
+    if is_dark(theme) {
+        Color::from_rgb(1.0, 0.7, 0.2)
+    } else {
+        Color::from_rgb(0.9, 0.55, 0.0)
+    }
 }
 
 /// Axis changed but data values identical — possible missing rescale.
 /// Bright magenta/red to stand out.
 pub fn rescale_warning_color(theme: &Theme) -> Color {
-    if is_dark(theme) { Color::from_rgb(1.0, 0.3, 0.6) } else { Color::from_rgb(0.85, 0.1, 0.35) }
+    if is_dark(theme) {
+        Color::from_rgb(1.0, 0.3, 0.6)
+    } else {
+        Color::from_rgb(0.85, 0.1, 0.35)
+    }
 }
 
 /// Background tint for the rescale warning banner.

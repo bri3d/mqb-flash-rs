@@ -163,10 +163,21 @@ fn parse_compu_method(lex: &mut Lexer<'_>) -> Result<CompuMethod> {
 
     let mut conversion = match conv_type.as_str() {
         "IDENTICAL" => Conversion::Identical,
-        "RAT_FUNC" => Conversion::RatFunc { a: 0.0, b: 1.0, c: 0.0, d: 0.0, e: 0.0, f: 1.0 },
+        "RAT_FUNC" => Conversion::RatFunc {
+            a: 0.0,
+            b: 1.0,
+            c: 0.0,
+            d: 0.0,
+            e: 0.0,
+            f: 1.0,
+        },
         "LINEAR" => Conversion::Linear { a: 1.0, b: 0.0 },
-        "TAB_VERB" | "VERB_SEQ" => Conversion::TabVerb { tab_ref: String::new() },
-        "FORM" => Conversion::Form { formula: String::new() },
+        "TAB_VERB" | "VERB_SEQ" => Conversion::TabVerb {
+            tab_ref: String::new(),
+        },
+        "FORM" => Conversion::Form {
+            formula: String::new(),
+        },
         other => Conversion::Other(other.to_string()),
     };
 
@@ -208,7 +219,13 @@ fn parse_compu_method(lex: &mut Lexer<'_>) -> Result<CompuMethod> {
         }
     }
 
-    Ok(CompuMethod { name, description, format, unit, conversion })
+    Ok(CompuMethod {
+        name,
+        description,
+        format,
+        unit,
+        conversion,
+    })
 }
 
 // ── COMPU_VTAB ────────────────────────────────────────────────────────────────
@@ -216,7 +233,7 @@ fn parse_compu_method(lex: &mut Lexer<'_>) -> Result<CompuMethod> {
 fn parse_compu_vtab(lex: &mut Lexer<'_>) -> Result<CompuVtab> {
     let name = expect_word(lex)?.to_string();
     let _description = expect_string_or_word(lex)?;
-    let _tab_type = expect_word(lex)?;    // TAB_VERB
+    let _tab_type = expect_word(lex)?; // TAB_VERB
     let count: usize = expect_word(lex)?.parse().unwrap_or(0);
 
     let mut entries = Vec::with_capacity(count);
@@ -281,7 +298,11 @@ fn parse_compu_vtab_range(lex: &mut Lexer<'_>) -> Result<CompuVtabRange> {
         }
     }
 
-    Ok(CompuVtabRange { name, entries, default_label })
+    Ok(CompuVtabRange {
+        name,
+        entries,
+        default_label,
+    })
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -347,11 +368,11 @@ fn parse_f64(lex: &mut Lexer<'_>) -> Result<f64> {
 
 fn parse_f64_str(s: &str) -> Result<f64> {
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        let v = u64::from_str_radix(hex, 16)
-            .map_err(|_| Error::ParseFloat(s.to_string()))?;
+        let v = u64::from_str_radix(hex, 16).map_err(|_| Error::ParseFloat(s.to_string()))?;
         Ok(v as f64)
     } else {
-        s.parse::<f64>().map_err(|_| Error::ParseFloat(s.to_string()))
+        s.parse::<f64>()
+            .map_err(|_| Error::ParseFloat(s.to_string()))
     }
 }
 
@@ -429,7 +450,9 @@ fn parse_characteristic(lex: &mut Lexer<'_>) -> Result<Characteristic> {
                 let kw = expect_word(lex)?;
                 match kw.as_str() {
                     "AXIS_DESCR" => axes.push(parse_axis_descr(lex)?),
-                    _ => { skip_block(lex, 1)?; }
+                    _ => {
+                        skip_block(lex, 1)?;
+                    }
                 }
             }
             Some(tok) if tok.eq_word("FORMAT") => {
@@ -443,8 +466,17 @@ fn parse_characteristic(lex: &mut Lexer<'_>) -> Result<Characteristic> {
     }
 
     Ok(Characteristic {
-        name, description, char_type, address, deposit, max_diff,
-        compu_method_ref, lower_limit, upper_limit, axes, format,
+        name,
+        description,
+        char_type,
+        address,
+        deposit,
+        max_diff,
+        compu_method_ref,
+        lower_limit,
+        upper_limit,
+        axes,
+        format,
         display_identifier,
     })
 }
@@ -507,7 +539,9 @@ fn parse_axis_descr(lex: &mut Lexer<'_>) -> Result<AxisDescr> {
                         }
                         fix_axis_par_list = Some(vals);
                     }
-                    _ => { skip_block(lex, 1)?; }
+                    _ => {
+                        skip_block(lex, 1)?;
+                    }
                 }
             }
             Some(tok) if tok.eq_word("AXIS_PTS_REF") => {
@@ -517,7 +551,11 @@ fn parse_axis_descr(lex: &mut Lexer<'_>) -> Result<AxisDescr> {
                 let offset = parse_f64(lex)?;
                 let distance = parse_f64(lex)?;
                 let count = parse_u16(lex)?;
-                fix_axis_par_dist = Some(FixAxisParDist { offset, distance, count });
+                fix_axis_par_dist = Some(FixAxisParDist {
+                    offset,
+                    distance,
+                    count,
+                });
             }
             Some(tok) if tok.eq_word("FORMAT") => {
                 format = Some(expect_string_or_word(lex)?);
@@ -527,9 +565,16 @@ fn parse_axis_descr(lex: &mut Lexer<'_>) -> Result<AxisDescr> {
     }
 
     Ok(AxisDescr {
-        attribute, input_quantity, compu_method_ref, max_axis_points,
-        lower_limit, upper_limit, axis_pts_ref, fix_axis_par_dist,
-        fix_axis_par_list, format,
+        attribute,
+        input_quantity,
+        compu_method_ref,
+        max_axis_points,
+        lower_limit,
+        upper_limit,
+        axis_pts_ref,
+        fix_axis_par_dist,
+        fix_axis_par_list,
+        format,
     })
 }
 
@@ -579,8 +624,17 @@ fn parse_axis_pts_block(lex: &mut Lexer<'_>) -> Result<AxisPts> {
     }
 
     Ok(AxisPts {
-        name, description, address, input_quantity, deposit, max_diff,
-        compu_method_ref, max_axis_points, lower_limit, upper_limit, format,
+        name,
+        description,
+        address,
+        input_quantity,
+        deposit,
+        max_diff,
+        compu_method_ref,
+        max_axis_points,
+        lower_limit,
+        upper_limit,
+        format,
     })
 }
 
@@ -589,7 +643,10 @@ fn parse_axis_pts_block(lex: &mut Lexer<'_>) -> Result<AxisPts> {
 fn parse_record_layout(lex: &mut Lexer<'_>) -> Result<RecordLayout> {
     let name = expect_word(lex)?;
 
-    let mut layout = RecordLayout { name, ..Default::default() };
+    let mut layout = RecordLayout {
+        name,
+        ..Default::default()
+    };
 
     loop {
         match lex.next_token() {
@@ -693,14 +750,22 @@ fn parse_function(lex: &mut Lexer<'_>) -> Result<Function> {
                     "SUB_FUNCTION" => {
                         parse_name_list(lex, &mut sub_functions, "SUB_FUNCTION")?;
                     }
-                    _ => { skip_block(lex, 1)?; }
+                    _ => {
+                        skip_block(lex, 1)?;
+                    }
                 }
             }
             Some(_) => {} // FUNCTION_VERSION, etc.
         }
     }
 
-    Ok(Function { name, description, def_characteristics, ref_characteristics, sub_functions })
+    Ok(Function {
+        name,
+        description,
+        def_characteristics,
+        ref_characteristics,
+        sub_functions,
+    })
 }
 
 /// Parse a list of names terminated by `/end KEYWORD`.

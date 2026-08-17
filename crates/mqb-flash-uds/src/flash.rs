@@ -21,13 +21,13 @@
 use std::collections::HashMap;
 use thiserror::Error;
 
-use automotive::can::{AsyncCanAdapter, Identifier};
 use automotive::can::bitrate::BitrateBuilder;
+use automotive::can::{AsyncCanAdapter, Identifier};
 use automotive::isotp::{IsoTPAdapter, IsoTPConfig};
 use automotive::uds::{RoutineControlType, UDSClient};
-use automotive::{TransportLayer, StreamExt};
+use automotive::{StreamExt, TransportLayer};
 
-use mqb_modules::{BlockCrypto, FlashInfo, PreparedBlockData};
+use mqb_modules::{FlashInfo, PreparedBlockData};
 use mqb_sa2::Sa2Vm;
 
 use mqb_transport::{FakeCanAdapter, Interface};
@@ -77,18 +77,35 @@ pub enum ProgressUpdate {
     CheckingPreconditions,
     /// Step 5: Upgrading to programming session.
     ProgrammingSession,
+    /// The normal programming-session request was refused and the SwitchPatch
+    /// fallback (`3E 10 02`) was accepted.
+    ///
+    /// This is **not** evidence that the ECU is unlocked. This tool does not
+    /// apply SwitchPatch, so the fallback's success says nothing about whether
+    /// our CBOOT sample-mode patch is present. Unlock state is determined by
+    /// [`crate::unlock::probe_unlock_state`], which reads the hardware version
+    /// from inside CBOOT.
+    SwitchPatchUsed,
     /// Step 7: SA2 seed-key authentication.
     Authenticating,
     /// Step 9: Writing workshop code.
     WritingWorkshopCode,
     /// Starting to flash a block (overall progress).
-    FlashingBlock { name: String, index: usize, total: usize },
+    FlashingBlock {
+        name: String,
+        index: usize,
+        total: usize,
+    },
     /// Sub-step: erasing the block.
     BlockErasing { name: String },
     /// Sub-step: requesting download.
     BlockDownloading { name: String },
     /// Sub-step: transfer data progress (bytes_sent / bytes_total).
-    BlockTransferProgress { name: String, bytes_sent: usize, bytes_total: usize },
+    BlockTransferProgress {
+        name: String,
+        bytes_sent: usize,
+        bytes_total: usize,
+    },
     /// Sub-step: verifying block checksum.
     BlockChecksum { name: String },
     /// Block finished.
@@ -120,18 +137,8 @@ pub struct FlashOptions {
     pub progress_tx: Option<tokio::sync::mpsc::UnboundedSender<ProgressUpdate>>,
 }
 
-// ── Block preparation helpers ─────────────────────────────────────────────────
-
-/// LZSS-compress then AES-encrypt a raw binary block (normal blocks ≤ 5).
-pub fn prepare_block_for_flash(data: &[u8], crypto: &dyn BlockCrypto) -> Vec<u8> {
-    let compressed = mqb_lzss::encode(data, mqb_lzss::Padding::AesBlock);
-    crypto.encrypt(&compressed)
-}
-
-/// AES-encrypt a raw binary without LZSS (for patch blocks > 5).
-pub fn prepare_patch_for_flash(data: &[u8], crypto: &dyn BlockCrypto) -> Vec<u8> {
-    crypto.encrypt(data)
-}
+// Block preparation lives in `crate::prepare` — it is per-module policy, not
+// protocol, and both the CLI and the GUI need it without a transport.
 
 // ── Windows timer resolution ─────────────────────────────────────────────────
 
@@ -179,7 +186,9 @@ struct HighResTimerGuard;
 
 #[cfg(not(windows))]
 impl HighResTimerGuard {
-    fn activate() -> Self { Self }
+    fn activate() -> Self {
+        Self
+    }
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -212,21 +221,29 @@ pub async fn flash_blocks(
             let adapter = AsyncCanAdapter::new(fake);
             run_with_adapter(&adapter, flash_info, &blocks, &opts).await
         }
-        Interface::SocketCan(iface) => {
-            flash_via_socketcan(iface, flash_info, &blocks, &opts).await
-        }
-        Interface::Panda => {
-            flash_via_panda(flash_info, &blocks, &opts).await
-        }
-        Interface::J2534 { dll, bitrate, native_isotp } => {
-            flash_via_j2534(dll.as_deref(), *bitrate, *native_isotp, flash_info, &blocks, &opts).await
+        Interface::SocketCan(iface) => flash_via_socketcan(iface, flash_info, &blocks, &opts).await,
+        Interface::Panda => flash_via_panda(flash_info, &blocks, &opts).await,
+        Interface::J2534 {
+            dll,
+            bitrate,
+            native_isotp,
+        } => {
+            flash_via_j2534(
+                dll.as_deref(),
+                *bitrate,
+                *native_isotp,
+                flash_info,
+                &blocks,
+                &opts,
+            )
+            .await
         }
     }
 }
 
 // ── SocketCAN dispatch ────────────────────────────────────────────────────────
 
-#[cfg(feature = "socketcan")]
+#[cfg(all(target_os = "linux", feature = "socketcan"))]
 async fn flash_via_socketcan(
     iface: &str,
     flash_info: &FlashInfo,
@@ -239,7 +256,7 @@ async fn flash_via_socketcan(
     run_with_adapter(&adapter, flash_info, blocks, opts).await
 }
 
-#[cfg(not(feature = "socketcan"))]
+#[cfg(not(all(target_os = "linux", feature = "socketcan")))]
 async fn flash_via_socketcan(
     _iface: &str,
     _flash_info: &FlashInfo,
@@ -273,7 +290,9 @@ async fn flash_via_panda(
 // ── J2534 dispatch ────────────────────────────────────────────────────────────
 
 #[cfg(feature = "j2534")]
-fn j2534_bitrate_config(bitrate: u32) -> Result<automotive::can::bitrate::BitrateConfig, FlashError> {
+fn j2534_bitrate_config(
+    bitrate: u32,
+) -> Result<automotive::can::bitrate::BitrateConfig, FlashError> {
     BitrateBuilder::new::<automotive::j2534::J2534CanAdapter>()
         .bitrate(bitrate)
         .build()
@@ -307,7 +326,9 @@ async fn flash_via_j2534(
                 send_obd_dtc_clear::<J2534NativeIsoTpTransport>(&obd).await;
                 tokio::task::spawn_blocking(move || drop(obd))
                     .await
-                    .map_err(|e| FlashError::Interface(format!("OBD channel teardown failed: {e}")))?;
+                    .map_err(|e| {
+                        FlashError::Interface(format!("OBD channel teardown failed: {e}"))
+                    })?;
             }
             Err(e) => {
                 tracing::warn!("OBD DTC clear channel open failed: {e} (continuing)");
@@ -315,15 +336,11 @@ async fn flash_via_j2534(
         }
 
         let mut flash_config = make_isotp_config(flash_info);
-        if let Some(stmin_us) = opts.stmin_override {
-            flash_config.separation_time_min = Some(std::time::Duration::from_micros(stmin_us as u64));
-        }
-        let transport = automotive::j2534::J2534NativeIsoTpTransport::new(
-            dll,
-            bitrate_cfg,
-            flash_config,
-        )
-        .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
+        let stmin_us = opts.stmin_override.unwrap_or(flash_info.default_stmin_us);
+        flash_config.separation_time_min = Some(std::time::Duration::from_micros(stmin_us as u64));
+        let transport =
+            automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate_cfg, flash_config)
+                .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
         let result = run_with_transport(&transport, flash_info, blocks, opts).await;
 
         // Drop the flash transport before opening a new one for post-reset DTC clear.
@@ -344,7 +361,9 @@ async fn flash_via_j2534(
                     tokio::task::spawn_blocking(move || drop(obd));
                 }
                 Err(e) => {
-                    tracing::warn!("Post-reset OBD DTC clear channel open failed: {e} (continuing)");
+                    tracing::warn!(
+                        "Post-reset OBD DTC clear channel open failed: {e} (continuing)"
+                    );
                 }
             }
         }
@@ -378,16 +397,29 @@ async fn flash_via_j2534(
 
 // ── ISO-TP config ─────────────────────────────────────────────────────────────
 
-fn make_isotp_config(flash_info: &FlashInfo) -> IsoTPConfig {
+/// ISO-TP configuration for a module's diagnostic channel.
+///
+/// `pub` so the wizard can open a transport once and reuse it across
+/// identification, immobilizer pre-flight and flashing, instead of
+/// opening/closing the physical device per operation.
+pub fn make_isotp_config(flash_info: &FlashInfo) -> IsoTPConfig {
     let mut config = IsoTPConfig::new_from_tx_rx(
         0,
         Identifier::from(flash_info.control_module_identifier.txid),
         Identifier::from(flash_info.control_module_identifier.rxid),
     );
-    // Default is 100 ms; ECUs in programming mode can take several seconds to respond.
-    config.timeout = std::time::Duration::from_secs(5);
+    // Default is 100 ms. An erase of a 1 MB ASW block, or the block checksum
+    // routine, can run for many seconds between response-pending frames — the
+    // Python tool raises p2_server_max and request_timeout to 30 s for exactly
+    // this reason ("setups which lie about their response speed").
+    config.timeout = std::time::Duration::from_secs(30);
+    // VW testers pad with 0x55. The upstream default is 0xAA.
+    config.padding = Some(TX_PADDING_BYTE);
     config
 }
+
+/// ISO-TP TX padding byte used by the VW tester on every connection.
+const TX_PADDING_BYTE: u8 = 0x55;
 
 // ── Generic transport runner ──────────────────────────────────────────────────
 
@@ -402,7 +434,52 @@ async fn run_with_transport<T: TransportLayer>(
     opts: &FlashOptions,
 ) -> Result<(), FlashError> {
     let uds = UDSClient::new(transport);
-    run_flash_sequence(&uds, flash_info, blocks, opts).await
+    run_flash_sequence(&uds, transport, flash_info, blocks, opts).await
+}
+
+/// Send the SwitchPatch programming-session request (`3E 10 02`) raw.
+///
+/// This cannot go through [`UDSClient`]: a patched ASW answers with `50 02 …`
+/// (the DiagnosticSessionControl positive response), but `UDSClient` would
+/// enforce a `0x7E` echo for a `0x3E` request and reject it as
+/// `InvalidServiceId`. Both `0x7E` and `0x50` are accepted here.
+///
+/// Returns `Ok(())` if the ECU accepted the request.
+async fn send_switchpatch<T: TransportLayer>(transport: &T) -> Result<(), FlashError> {
+    transport
+        .send(&[0x3E, 0x10, 0x02])
+        .await
+        .map_err(FlashError::from)?;
+
+    let mut stream = transport.recv();
+    let timeout = std::time::Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout(timeout, stream.next()).await {
+            Ok(Some(Ok(resp))) if resp.is_empty() => continue,
+            Ok(Some(Ok(resp))) => {
+                // responsePending — keep waiting, refreshing the timeout.
+                if resp.len() >= 3 && resp[0] == 0x7F && resp[2] == 0x78 {
+                    continue;
+                }
+                return match resp[0] {
+                    0x7E | 0x50 => {
+                        tracing::info!("SwitchPatch accepted (response SID 0x{:02X})", resp[0]);
+                        Ok(())
+                    }
+                    0x7F => Err(FlashError::NegativeResponse {
+                        service: "SwitchPatch (3E 10 02)".into(),
+                        code: *resp.get(2).unwrap_or(&0),
+                    }),
+                    other => Err(FlashError::Interface(format!(
+                        "SwitchPatch: unexpected response SID 0x{other:02X}"
+                    ))),
+                };
+            }
+            Ok(Some(Err(e))) => return Err(FlashError::Interface(e.to_string())),
+            Ok(None) => return Err(FlashError::Timeout),
+            Err(_) => return Err(FlashError::Timeout),
+        }
+    }
 }
 
 // ── Software ISO-TP adapter runner ────────────────────────────────────────────
@@ -420,7 +497,9 @@ async fn run_with_adapter(
     send_obd_dtc_clear_via_adapter(adapter).await;
 
     let mut config = make_isotp_config(flash_info);
-    let stmin_us = opts.stmin_override.unwrap_or(500);
+    // Fall back to the module's own STmin, not a global constant: Simos
+    // tolerates 400 µs, the transmission and AWD ECUs need 900 µs.
+    let stmin_us = opts.stmin_override.unwrap_or(flash_info.default_stmin_us);
     config.separation_time_min = Some(std::time::Duration::from_micros(stmin_us as u64));
     let isotp = IsoTPAdapter::new(adapter, config);
     let result = run_with_transport(&isotp, flash_info, blocks, opts).await;
@@ -479,7 +558,10 @@ async fn send_obd_dtc_clear<T: TransportLayer>(transport: &T) {
                 return;
             }
             Err(_) => {
-                tracing::debug!("OBD DTC clear: no response within {} s (OK)", timeout.as_secs());
+                tracing::debug!(
+                    "OBD DTC clear: no response within {} s (OK)",
+                    timeout.as_secs()
+                );
                 return;
             }
         }
@@ -492,11 +574,8 @@ async fn send_obd_dtc_clear<T: TransportLayer>(transport: &T) {
 /// fixed OBD-II IDs (tester TX = 0x700, ECU RX = 0x7E8), calls
 /// [`send_obd_dtc_clear`], then discards the adapter.
 async fn send_obd_dtc_clear_via_adapter(adapter: &AsyncCanAdapter) {
-    let mut config = IsoTPConfig::new_from_tx_rx(
-        0,
-        Identifier::from(0x700u32),
-        Identifier::from(0x7E8u32),
-    );
+    let mut config =
+        IsoTPConfig::new_from_tx_rx(0, Identifier::from(0x700u32), Identifier::from(0x7E8u32));
     config.timeout = std::time::Duration::from_secs(2);
     let isotp = IsoTPAdapter::new(adapter, config);
     send_obd_dtc_clear(&isotp).await;
@@ -506,6 +585,7 @@ async fn send_obd_dtc_clear_via_adapter(adapter: &AsyncCanAdapter) {
 
 async fn run_flash_sequence<T: TransportLayer>(
     uds: &UDSClient<'_, T>,
+    transport: &T,
     flash_info: &FlashInfo,
     blocks: &[PreparedBlockData],
     opts: &FlashOptions,
@@ -529,7 +609,8 @@ async fn run_flash_sequence<T: TransportLayer>(
     // 3. Check programming precondition
     send_progress(opts, ProgressUpdate::CheckingPreconditions);
     tracing::info!("Checking programming precondition (0x0203)");
-    uds.routine_control(RoutineControlType::Start, 0x0203, None).await?;
+    uds.routine_control(RoutineControlType::Start, 0x0203, None)
+        .await?;
 
     // 4. TesterPresent before session upgrade
     uds.tester_present().await?;
@@ -541,8 +622,18 @@ async fn run_flash_sequence<T: TransportLayer>(
     tracing::info!("Upgrading to programming session");
     if let Err(e) = uds.diagnostic_session_control(0x02).await {
         tracing::warn!("Normal programming session request failed ({e}), trying SwitchPatch");
-        uds.request(0x3E, None, Some(&[0x10, 0x02])).await
-            .map_err(|_| e)?;  // surface original error if fallback also fails
+        match send_switchpatch(transport).await {
+            Ok(()) => send_progress(opts, ProgressUpdate::SwitchPatchUsed),
+            Err(fallback_err) => {
+                // Report both: the original refusal explains *why* we fell back,
+                // the fallback error explains why the fallback did not save us.
+                tracing::warn!("SwitchPatch also failed: {fallback_err}");
+                return Err(FlashError::Interface(format!(
+                    "Could not enter programming session. \
+                     Normal request: {e}. SwitchPatch fallback: {fallback_err}"
+                )));
+            }
+        }
     }
 
     // 6. TesterPresent
@@ -556,11 +647,12 @@ async fn run_flash_sequence<T: TransportLayer>(
         return Err(FlashError::AuthFailed);
     }
     let seed = mqb_bytes::read_u32_be(&seed_bytes, 0);
-    let vm  = Sa2Vm::new(flash_info.sa2_script);
-    let key  = vm.execute(seed);
+    let vm = Sa2Vm::new(flash_info.sa2_script);
+    let key = vm.execute(seed);
     tracing::debug!("SA2: seed=0x{seed:08X}, key=0x{key:08X}");
     let key_bytes = key.to_be_bytes();
-    uds.security_access(0x12, Some(&key_bytes)).await
+    uds.security_access(0x12, Some(&key_bytes))
+        .await
         .map_err(|_| FlashError::AuthFailed)?;
 
     // 8. TesterPresent
@@ -569,7 +661,8 @@ async fn run_flash_sequence<T: TransportLayer>(
     // 9. Write workshop code
     send_progress(opts, ProgressUpdate::WritingWorkshopCode);
     tracing::info!("Writing workshop code to DID 0xF15A");
-    uds.write_data_by_identifier(0xF15A, &opts.workshop_code).await?;
+    uds.write_data_by_identifier(0xF15A, &opts.workshop_code)
+        .await?;
 
     // 10. TesterPresent
     uds.tester_present().await?;
@@ -577,11 +670,14 @@ async fn run_flash_sequence<T: TransportLayer>(
     // 11. Flash blocks in caller-supplied order
     let total = blocks.len();
     for (index, block) in blocks.iter().enumerate() {
-        send_progress(opts, ProgressUpdate::FlashingBlock {
-            name: block.block_name.clone(),
-            index,
-            total,
-        });
+        send_progress(
+            opts,
+            ProgressUpdate::FlashingBlock {
+                name: block.block_name.clone(),
+                index,
+                total,
+            },
+        );
         if block.block_number <= 5 {
             flash_normal_block(uds, flash_info, block, opts).await?;
         } else {
@@ -594,7 +690,8 @@ async fn run_flash_sequence<T: TransportLayer>(
     // 12. Verify programming dependencies
     send_progress(opts, ProgressUpdate::Verifying);
     tracing::info!("Verifying programming dependencies (0xFF01)");
-    uds.routine_control(RoutineControlType::Start, 0xFF01, None).await?;
+    uds.routine_control(RoutineControlType::Start, 0xFF01, None)
+        .await?;
 
     // 13. TesterPresent
     uds.tester_present().await?;
@@ -630,7 +727,12 @@ async fn flash_normal_block<T: TransportLayer>(
 ) -> Result<(), FlashError> {
     let block_id = flash_info
         .block_identifier(block.block_number)
-        .ok_or_else(|| FlashError::Config(format!("No block_identifier for block {}", block.block_number)))?;
+        .ok_or_else(|| {
+            FlashError::Config(format!(
+                "No block_identifier for block {}",
+                block.block_number
+            ))
+        })?;
 
     tracing::info!(
         block = block.block_number,
@@ -641,35 +743,55 @@ async fn flash_normal_block<T: TransportLayer>(
 
     // Erase
     if block.should_erase {
-        send_progress(opts, ProgressUpdate::BlockErasing { name: block.block_name.clone() });
+        send_progress(
+            opts,
+            ProgressUpdate::BlockErasing {
+                name: block.block_name.clone(),
+            },
+        );
         tracing::debug!(block = block.block_number, "Erasing (0xFF00)");
-        uds.routine_control(
-            RoutineControlType::Start,
-            0xFF00,
-            Some(&[0x01, block_id]),
-        ).await?;
+        uds.routine_control(RoutineControlType::Start, 0xFF00, Some(&[0x01, block_id]))
+            .await?;
     }
 
-    // Request download: 1-byte address (block_id), 4-byte size (uncompressed block length)
-    let block_len = flash_info
-        .block_length(block.block_number)
-        .ok_or_else(|| FlashError::Config(format!("No block_length for block {}", block.block_number)))?;
-    let size_be = (block_len as u32).to_be_bytes();
+    // Request download: 1-byte address (block_id), 4-byte size (uncompressed
+    // block length). This comes from the prepared block, not the static table:
+    // modules with dynamic block lengths (Haldex) store the real length in the
+    // block header, and it differs from the table by up to 0x1B18 bytes on
+    // real firmware.
+    let size_be = block.announced_length.to_be_bytes();
 
-    send_progress(opts, ProgressUpdate::BlockDownloading { name: block.block_name.clone() });
+    send_progress(
+        opts,
+        ProgressUpdate::BlockDownloading {
+            name: block.block_name.clone(),
+        },
+    );
     tracing::debug!(block = block.block_number, "RequestDownload");
-    let max_chunk = uds.request_download(
-        block.compression_type,
-        block.encryption_type,
-        &[block_id],
-        &size_be,
-    ).await?;
+    let max_chunk = uds
+        .request_download(
+            block.compression_type,
+            block.encryption_type,
+            &[block_id],
+            &size_be,
+        )
+        .await?;
 
-    // Transfer data
+    // Transfer data.
+    //
+    // Per ISO 14229 the ECU's `maxNumberOfBlockLength` counts the TransferData
+    // SID and blockSequenceCounter, so the usable payload is 2 bytes less.
+    // This is inert on Simos18 (0xFFD configured vs 0xFFF reported) but bites
+    // the strict transmission ECUs, whose configured sizes are 0xF0 / 0x100.
     let transfer_size = flash_info
         .block_transfer_size(block.block_number)
         .unwrap_or(0xFFD)
-        .min(max_chunk);
+        .min(max_chunk.saturating_sub(2));
+    if transfer_size == 0 {
+        return Err(FlashError::Config(format!(
+            "ECU reported maxNumberOfBlockLength {max_chunk}, leaving no room for a payload"
+        )));
+    }
 
     tracing::debug!(
         block = block.block_number,
@@ -687,26 +809,31 @@ async fn flash_normal_block<T: TransportLayer>(
         uds.transfer_data(counter, Some(&data[offset..end])).await?;
         counter = counter.wrapping_add(1);
         offset = end;
-        send_progress(opts, ProgressUpdate::BlockTransferProgress {
-            name: block.block_name.clone(),
-            bytes_sent: offset,
-            bytes_total: data_len,
-        });
+        send_progress(
+            opts,
+            ProgressUpdate::BlockTransferProgress {
+                name: block.block_name.clone(),
+                bytes_sent: offset,
+                bytes_total: data_len,
+            },
+        );
     }
 
     // Exit transfer
     uds.request_transfer_exit(None).await?;
 
     // Checksum routine: data = [0x01, block_id, 0x00, 0x04, <4-byte UDS checksum>]
-    send_progress(opts, ProgressUpdate::BlockChecksum { name: block.block_name.clone() });
+    send_progress(
+        opts,
+        ProgressUpdate::BlockChecksum {
+            name: block.block_name.clone(),
+        },
+    );
     let mut checksum_data = vec![0x01u8, block_id, 0x00, 0x04];
     checksum_data.extend_from_slice(&block.uds_checksum);
     tracing::debug!(block = block.block_number, "Checksum routine (0x0202)");
-    uds.routine_control(
-        RoutineControlType::Start,
-        0x0202,
-        Some(&checksum_data),
-    ).await?;
+    uds.routine_control(RoutineControlType::Start, 0x0202, Some(&checksum_data))
+        .await?;
 
     tracing::info!(block = block.block_number, "Block flashed successfully");
     Ok(())
@@ -714,7 +841,11 @@ async fn flash_normal_block<T: TransportLayer>(
 
 // ── Patch block (>5, WriteWithoutErase) ───────────────────────────────────────
 
-const MAX_PATCH_RETRIES: usize = 10;
+/// WriteWithoutErase depends on resending a chunk until the flash controller's
+/// assembly page is ready, so a negative response is an expected, routine part
+/// of the handshake rather than an error. Python loops without a bound; this
+/// cap only exists to stop a truly wedged ECU from spinning forever.
+const MAX_PATCH_RETRIES: usize = 200;
 
 async fn flash_patch_block<T: TransportLayer>(
     uds: &UDSClient<'_, T>,
@@ -732,32 +863,39 @@ async fn flash_patch_block<T: TransportLayer>(
     );
 
     // Step 1: Erase CAL (block 5) before patching
-    send_progress(opts, ProgressUpdate::BlockErasing { name: block.block_name.clone() });
+    send_progress(
+        opts,
+        ProgressUpdate::BlockErasing {
+            name: block.block_name.clone(),
+        },
+    );
     let cal_id = flash_info
         .block_identifier(5)
         .ok_or_else(|| FlashError::Config("No block_identifier for CAL (block 5)".into()))?;
-    uds.routine_control(
-        RoutineControlType::Start,
-        0xFF00,
-        Some(&[0x01, cal_id]),
-    ).await?;
+    uds.routine_control(RoutineControlType::Start, 0xFF00, Some(&[0x01, cal_id]))
+        .await?;
 
     // Step 2: RequestDownload for the target block; encryption 0xA, compression 0x0
-    send_progress(opts, ProgressUpdate::BlockDownloading { name: block.block_name.clone() });
-    let block_len = flash_info
-        .block_length(target_num)
-        .ok_or_else(|| FlashError::Config(format!("No block_length for target block {target_num}")))?;
-    let size_be = (block_len as u32).to_be_bytes();
+    send_progress(
+        opts,
+        ProgressUpdate::BlockDownloading {
+            name: block.block_name.clone(),
+        },
+    );
+    let size_be = block.announced_length.to_be_bytes();
 
     uds.request_download(
-        0x00,  // no compression
-        0x0A,  // AES encryption
+        block.compression_type,
+        block.encryption_type,
         &[target_num],
         &size_be,
-    ).await?;
+    )
+    .await?;
 
     // Step 3: Transfer with variable chunk sizes from patch_info, with retry on negative response
-    let patch_info = flash_info.patch_info.as_ref()
+    let patch_info = flash_info
+        .patch_info
+        .as_ref()
         .ok_or_else(|| FlashError::Config("No patch_info for this ECU".into()))?;
 
     let data = &block.block_encrypted_bytes;
@@ -776,22 +914,33 @@ async fn flash_patch_block<T: TransportLayer>(
                     success = true;
                     break;
                 }
-                Err(_) if attempt + 1 < MAX_PATCH_RETRIES => {
-                    tracing::debug!(attempt, offset, "Patch TransferData retry");
+                // Only a negative response means "not ready, send it again".
+                // A timeout or a transport error means the link is broken —
+                // retrying then just burns through the budget and leaves the
+                // block half-written with a misleading final error.
+                Err(automotive::Error::UDSError(automotive::uds::Error::NegativeResponse(nrc)))
+                    if attempt + 1 < MAX_PATCH_RETRIES =>
+                {
+                    tracing::debug!(attempt, offset, ?nrc, "Patch TransferData retry");
                     counter = counter.wrapping_add(1);
                 }
                 Err(e) => return Err(FlashError::from(e)),
             }
         }
         if !success {
-            return Err(FlashError::Config("Patch TransferData retries exhausted".into()));
+            return Err(FlashError::Config(
+                "Patch TransferData retries exhausted".into(),
+            ));
         }
         offset = end;
-        send_progress(opts, ProgressUpdate::BlockTransferProgress {
-            name: block.block_name.clone(),
-            bytes_sent: offset,
-            bytes_total: data_len,
-        });
+        send_progress(
+            opts,
+            ProgressUpdate::BlockTransferProgress {
+                name: block.block_name.clone(),
+                bytes_sent: offset,
+                bytes_total: data_len,
+            },
+        );
     }
 
     // Step 4: Exit transfer (no checksum for patch blocks)
@@ -799,6 +948,167 @@ async fn flash_patch_block<T: TransportLayer>(
 
     tracing::info!(target_block = target_num, "Patch complete");
     Ok(())
+}
+
+// ── Read-only probes ──────────────────────────────────────────────────────────
+
+/// A read-only question to ask an ECU over an interface.
+#[derive(Debug, Clone)]
+pub enum ProbeKind {
+    /// Identify which supported module answers on the channel the supplied
+    /// `FlashInfo`'s CAN identifiers belong to.
+    Identify,
+    /// Determine whether the ECU's CBOOT is patched (unlocked).
+    ///
+    /// Leaves the ECU in the bootloader — see [`crate::unlock`].
+    UnlockState,
+    /// Read the immobilizer snapshot (Simos only).
+    Immobilizer(crate::immo::ImmoSupport),
+    /// Reset the ECU, e.g. to bring it out of the bootloader.
+    Reset,
+}
+
+/// The answer to a [`ProbeKind`].
+#[derive(Debug, Clone)]
+pub enum ProbeOutcome {
+    Identify(Option<crate::identify::ChannelIdentification>),
+    UnlockState(crate::unlock::UnlockProbe),
+    Immobilizer(crate::immo::ImmoSnapshot),
+    Reset,
+}
+
+/// Run one read-only probe against an ECU.
+///
+/// Opens the physical device, asks the question, and closes it again. The
+/// interface dispatch lives here — exactly once — so callers never duplicate
+/// the `Interface` match arms.
+pub async fn probe(
+    interface: &Interface,
+    flash_info: &'static FlashInfo,
+    what: ProbeKind,
+) -> Result<ProbeOutcome, FlashError> {
+    match interface {
+        Interface::Fake(path) => {
+            let fake = FakeCanAdapter::new(path.as_path())
+                .map_err(|e| FlashError::Interface(format!("Fixture load error: {e}")))?;
+            let adapter = AsyncCanAdapter::new(fake);
+            let isotp = IsoTPAdapter::new(&adapter, make_isotp_config(flash_info));
+            run_probe(&isotp, flash_info, what).await
+        }
+        Interface::SocketCan(iface) => probe_via_socketcan(iface, flash_info, what).await,
+        Interface::Panda => {
+            let bitrate_cfg = BitrateBuilder::new::<automotive::panda::Panda>()
+                .bitrate(500_000)
+                .build()
+                .map_err(|e| FlashError::Interface(format!("Panda bitrate config error: {e}")))?;
+            let panda = automotive::panda::Panda::new(bitrate_cfg)
+                .map_err(|e| FlashError::Interface(format!("Panda open error: {e}")))?;
+            let adapter = AsyncCanAdapter::new(panda);
+            let isotp = IsoTPAdapter::new(&adapter, make_isotp_config(flash_info));
+            run_probe(&isotp, flash_info, what).await
+        }
+        Interface::J2534 {
+            dll,
+            bitrate,
+            native_isotp,
+        } => probe_via_j2534(dll.as_deref(), *bitrate, *native_isotp, flash_info, what).await,
+    }
+}
+
+async fn run_probe<T: TransportLayer>(
+    transport: &T,
+    flash_info: &'static FlashInfo,
+    what: ProbeKind,
+) -> Result<ProbeOutcome, FlashError> {
+    match what {
+        ProbeKind::Identify => Ok(ProbeOutcome::Identify(
+            crate::identify::identify_on_channel(transport, flash_info).await,
+        )),
+        ProbeKind::UnlockState => Ok(ProbeOutcome::UnlockState(
+            crate::unlock::probe_unlock_state(transport, flash_info).await?,
+        )),
+        ProbeKind::Immobilizer(support) => Ok(ProbeOutcome::Immobilizer(
+            crate::immo::read_immo_snapshot(transport, support).await,
+        )),
+        ProbeKind::Reset => {
+            crate::unlock::leave_bootloader(transport).await?;
+            Ok(ProbeOutcome::Reset)
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "socketcan"))]
+async fn probe_via_socketcan(
+    iface: &str,
+    flash_info: &'static FlashInfo,
+    what: ProbeKind,
+) -> Result<ProbeOutcome, FlashError> {
+    let sc = automotive::socketcan::SocketCanAdapter::open(iface)
+        .map_err(|e| FlashError::Interface(format!("SocketCAN open error: {e}")))?;
+    let adapter = AsyncCanAdapter::new(sc);
+    let isotp = IsoTPAdapter::new(&adapter, make_isotp_config(flash_info));
+    run_probe(&isotp, flash_info, what).await
+}
+
+#[cfg(not(all(target_os = "linux", feature = "socketcan")))]
+async fn probe_via_socketcan(
+    _iface: &str,
+    _flash_info: &'static FlashInfo,
+    _what: ProbeKind,
+) -> Result<ProbeOutcome, FlashError> {
+    Err(FlashError::Interface(
+        "SocketCAN support is not enabled. \
+         Recompile with `--features mqb-flash-uds/socketcan` on Linux."
+            .into(),
+    ))
+}
+
+#[cfg(feature = "j2534")]
+async fn probe_via_j2534(
+    dll: Option<&str>,
+    bitrate: u32,
+    native_isotp: bool,
+    flash_info: &'static FlashInfo,
+    what: ProbeKind,
+) -> Result<ProbeOutcome, FlashError> {
+    let bitrate_cfg = j2534_bitrate_config(bitrate)?;
+    if native_isotp {
+        let transport = automotive::j2534::J2534NativeIsoTpTransport::new(
+            dll,
+            bitrate_cfg,
+            make_isotp_config(flash_info),
+        )
+        .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
+        let result = run_probe(&transport, flash_info, what).await;
+        // Drop on a blocking thread: the J2534 teardown joins DLL threads and
+        // would otherwise stall the async runtime and freeze the UI.
+        tokio::task::spawn_blocking(move || drop(transport));
+        result
+    } else {
+        let j = automotive::j2534::J2534CanAdapter::new(dll, bitrate_cfg)
+            .map_err(|e| FlashError::Interface(format!("J2534 open error: {e}")))?;
+        let adapter = AsyncCanAdapter::new(j);
+        let isotp = IsoTPAdapter::new(&adapter, make_isotp_config(flash_info));
+        let result = run_probe(&isotp, flash_info, what).await;
+        drop(isotp);
+        tokio::task::spawn_blocking(move || drop(adapter));
+        result
+    }
+}
+
+#[cfg(not(feature = "j2534"))]
+async fn probe_via_j2534(
+    _dll: Option<&str>,
+    _bitrate: u32,
+    _native_isotp: bool,
+    _flash_info: &'static FlashInfo,
+    _what: ProbeKind,
+) -> Result<ProbeOutcome, FlashError> {
+    Err(FlashError::Interface(
+        "J2534 support is not enabled. \
+         Recompile with `--features mqb-flash-uds/j2534`."
+            .into(),
+    ))
 }
 
 // ── Read ECU data ─────────────────────────────────────────────────────────────
@@ -817,9 +1127,7 @@ pub async fn read_ecu_data(
             let adapter = AsyncCanAdapter::new(fake);
             read_ecu_with_adapter(&adapter, flash_info).await
         }
-        Interface::SocketCan(iface) => {
-            read_ecu_via_socketcan(iface, flash_info).await
-        }
+        Interface::SocketCan(iface) => read_ecu_via_socketcan(iface, flash_info).await,
         Interface::Panda => {
             let bitrate_cfg = BitrateBuilder::new::<automotive::panda::Panda>()
                 .bitrate(500_000)
@@ -830,9 +1138,11 @@ pub async fn read_ecu_data(
             let adapter = AsyncCanAdapter::new(panda);
             read_ecu_with_adapter(&adapter, flash_info).await
         }
-        Interface::J2534 { dll, bitrate, native_isotp } => {
-            read_ecu_via_j2534(dll.as_deref(), *bitrate, *native_isotp, flash_info).await
-        }
+        Interface::J2534 {
+            dll,
+            bitrate,
+            native_isotp,
+        } => read_ecu_via_j2534(dll.as_deref(), *bitrate, *native_isotp, flash_info).await,
     }
 }
 
@@ -847,12 +1157,8 @@ async fn read_ecu_via_j2534(
 
     if native_isotp {
         let config = make_isotp_config(flash_info);
-        let transport = automotive::j2534::J2534NativeIsoTpTransport::new(
-            dll,
-            bitrate_cfg,
-            config,
-        )
-        .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
+        let transport = automotive::j2534::J2534NativeIsoTpTransport::new(dll, bitrate_cfg, config)
+            .map_err(|e| FlashError::Interface(format!("J2534 ISO15765 open error: {e}")))?;
         let result = read_ecu_with_transport(&transport).await;
         // Drop on a blocking thread so the J2534 thread joins don't block
         // the async runtime (which would freeze the GUI for seconds).
@@ -882,7 +1188,7 @@ async fn read_ecu_via_j2534(
     ))
 }
 
-#[cfg(feature = "socketcan")]
+#[cfg(all(target_os = "linux", feature = "socketcan"))]
 async fn read_ecu_via_socketcan(
     iface: &str,
     flash_info: &FlashInfo,
@@ -893,7 +1199,7 @@ async fn read_ecu_via_socketcan(
     read_ecu_with_adapter(&adapter, flash_info).await
 }
 
-#[cfg(not(feature = "socketcan"))]
+#[cfg(not(all(target_os = "linux", feature = "socketcan")))]
 async fn read_ecu_via_socketcan(
     _iface: &str,
     _flash_info: &FlashInfo,
@@ -913,7 +1219,11 @@ async fn read_ecu_with_adapter(
     read_ecu_with_transport(&isotp).await
 }
 
-async fn read_ecu_with_transport<T: TransportLayer>(
+/// Read the standard data-record sweep and return it keyed by human description.
+///
+/// Note this collapses the records whose `description` is empty — prefer
+/// [`read_dids`] when you need the raw bytes for a specific DID.
+pub async fn read_ecu_with_transport<T: TransportLayer>(
     transport: &T,
 ) -> Result<HashMap<String, String>, FlashError> {
     let uds = UDSClient::new(transport);
@@ -927,14 +1237,58 @@ async fn read_ecu_with_transport<T: TransportLayer>(
                 let value = if record.parse_type == 0 {
                     String::from_utf8_lossy(&bytes).into_owned()
                 } else {
-                    bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
+                    bytes
+                        .iter()
+                        .map(|b| format!("{b:02X}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 };
-                result.insert(record.description.to_owned(), value);
+                // Seven DATA_RECORDS entries have an empty description; keying
+                // by it alone would silently collapse them onto one another.
+                let key = if record.description.is_empty() {
+                    format!("DID 0x{:04X}", record.address)
+                } else {
+                    record.description.to_owned()
+                };
+                result.insert(key, value);
             }
             Err(e) => {
-                tracing::debug!("DID 0x{:04X} ({}) error: {e}", record.address, record.description);
+                tracing::debug!(
+                    "DID 0x{:04X} ({}) error: {e}",
+                    record.address,
+                    record.description
+                );
             }
         }
     }
     Ok(result)
+}
+
+/// Read a specific set of DIDs over an already-open transport, keyed by DID.
+///
+/// Unlike [`read_ecu_data`] this does not open or close the physical device and
+/// does not sweep all 38 records — a bus scan across three candidate modules
+/// would otherwise cost three full open/close cycles and 114 requests.
+///
+/// DIDs the ECU refuses are simply absent from the map; that is normal and is
+/// itself a useful identification signal.
+pub async fn read_dids<T: TransportLayer>(transport: &T, dids: &[u16]) -> HashMap<u16, Vec<u8>> {
+    let uds = UDSClient::new(transport);
+    let mut out = HashMap::new();
+    for &did in dids {
+        match uds.read_data_by_identifier(did).await {
+            Ok(bytes) => {
+                out.insert(did, bytes);
+            }
+            Err(e) => tracing::debug!("DID 0x{did:04X} not readable: {e}"),
+        }
+    }
+    out
+}
+
+/// Open the default (`0x03`) diagnostic session over an already-open transport.
+pub async fn open_extended_session<T: TransportLayer>(transport: &T) -> Result<(), FlashError> {
+    let uds = UDSClient::new(transport);
+    uds.diagnostic_session_control(0x03).await?;
+    Ok(())
 }

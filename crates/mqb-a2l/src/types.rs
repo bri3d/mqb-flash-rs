@@ -72,7 +72,14 @@ pub enum Conversion {
     ///   `internal = (a·phys² + b·phys + c) / (d·phys² + e·phys + f)`
     ///
     /// To convert *from* internal to physical, use [`rat_func_to_physical`].
-    RatFunc { a: f64, b: f64, c: f64, d: f64, e: f64, f: f64 },
+    RatFunc {
+        a: f64,
+        b: f64,
+        c: f64,
+        d: f64,
+        e: f64,
+        f: f64,
+    },
 
     /// `LINEAR` with `COEFFS_LINEAR a b`:
     ///   `physical = a·internal + b`

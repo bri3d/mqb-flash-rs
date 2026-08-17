@@ -1,0 +1,136 @@
+# Simos18 full 5-block flash sequence — captured from a successful Python flash session.
+#
+# Source: full_flash_log/udsoncan.log (2026-03-11), session 3 of 3.
+# Module: Simos18 (S18_FLASH_INFO, project "SC8")
+# SA2 seed 0xF591323C -> key 0x64B92C84 (Simos18 SA2 script)
+# Workshop code: 26 03 11 1e 20 20 20 20 76
+# Blocks flashed: 1 (CBOOT), 2 (ASW1), 3 (ASW2), 4 (ASW3), 5 (CAL)
+#
+# T 7E0 = tester -> ECU  |  R 7E8 = ECU -> tester
+# UDS PDU bytes only (no ISO-TP framing) — see fake_adapter.rs for format details.
+# TransferData (SID 36 TX / SID 76 RX) handled automatically by FakeCanAdapter.
+#
+# Note: The Rust flash_normal_block sends Checksum BEFORE the loop's TesterPresent,
+# whereas the Python tool sent TesterPresent first. Fixture order matches Rust code.
+
+# 0. Pre-flash OBD-II DTC clear (mode 04)
+T 7E0 04
+R 7E8 44
+
+# 1. Extended diagnostic session
+T 7E0 10 03
+R 7E8 50 03 00 32 01 f4
+
+# 2. Read VIN
+T 7E0 22 f1 90
+R 7E8 62 f1 90 57 56 57 55 46 37 41 55 32 47 57 32 36 38 35 32 30
+
+# 3. Check programming precondition (routine 0x0203)
+T 7E0 31 01 02 03
+R 7E8 71 01 02 03
+
+# 4. TesterPresent
+T 7E0 3e 00
+R 7E8 7e 00
+
+# 5. Programming session
+T 7E0 10 02
+R 7E8 50 02 00 32 01 f4
+
+# 6. TesterPresent
+T 7E0 3e 00
+R 7E8 7e 00
+
+# 7. Security access — SA2 seed-key
+T 7E0 27 11
+R 7E8 67 11 f5 91 32 3c
+T 7E0 27 12 64 b9 2c 84
+R 7E8 67 12
+
+# 8. TesterPresent
+T 7E0 3e 00
+R 7E8 7e 00
+
+# 9. Write workshop code to DID 0xF15A
+T 7E0 2e f1 5a 26 03 11 1e 20 20 20 20 76
+R 7E8 6e f1 5a
+
+# 10. TesterPresent
+T 7E0 3e 00
+R 7E8 7e 00
+
+# ── Block 1 (CBOOT) — 0x23E00 bytes ─────────────────────────────────────────
+T 7E0 31 01 ff 00 01 01
+R 7E8 71 01 ff 00 00
+T 7E0 34 aa 41 01 00 02 3e 00
+R 7E8 74 20 0f ff
+T 7E0 37
+R 7E8 77
+T 7E0 31 01 02 02 01 01 00 04 00 00 00 00
+R 7E8 71 01 02 02 00
+T 7E0 3e 00
+R 7E8 7e 00
+
+# ── Block 2 (ASW1) — 0xFFC00 bytes ──────────────────────────────────────────
+T 7E0 31 01 ff 00 01 02
+R 7E8 71 01 ff 00 00
+T 7E0 34 aa 41 02 00 0f fc 00
+R 7E8 74 20 0f ff
+T 7E0 37
+R 7E8 77
+T 7E0 31 01 02 02 01 02 00 04 00 00 00 00
+R 7E8 71 01 02 02 00
+T 7E0 3e 00
+R 7E8 7e 00
+
+# ── Block 3 (ASW2) — 0xBFC00 bytes ──────────────────────────────────────────
+T 7E0 31 01 ff 00 01 03
+R 7E8 71 01 ff 00 00
+T 7E0 34 aa 41 03 00 0b fc 00
+R 7E8 74 20 0f ff
+T 7E0 37
+R 7E8 77
+T 7E0 31 01 02 02 01 03 00 04 00 00 00 00
+R 7E8 71 01 02 02 00
+T 7E0 3e 00
+R 7E8 7e 00
+
+# ── Block 4 (ASW3) — 0x7FC00 bytes ──────────────────────────────────────────
+T 7E0 31 01 ff 00 01 04
+R 7E8 71 01 ff 00 00
+T 7E0 34 aa 41 04 00 07 fc 00
+R 7E8 74 20 0f ff
+T 7E0 37
+R 7E8 77
+T 7E0 31 01 02 02 01 04 00 04 00 00 00 00
+R 7E8 71 01 02 02 00
+T 7E0 3e 00
+R 7E8 7e 00
+
+# ── Block 5 (CAL) — 0x7FC00 bytes ───────────────────────────────────────────
+T 7E0 31 01 ff 00 01 05
+R 7E8 71 01 ff 00 00
+T 7E0 34 aa 41 05 00 07 fc 00
+R 7E8 74 20 0f ff
+T 7E0 37
+R 7E8 77
+T 7E0 31 01 02 02 01 05 00 04 00 00 00 00
+R 7E8 71 01 02 02 00
+T 7E0 3e 00
+R 7E8 7e 00
+
+# 12. Verify programming dependencies (routine 0xFF01)
+T 7E0 31 01 ff 01
+R 7E8 71 01 ff 01 00
+
+# 13. TesterPresent
+T 7E0 3e 00
+R 7E8 7e 00
+
+# 14. ECUReset (hard reset)
+T 7E0 11 01
+R 7E8 51 01
+
+# 15. Post-flash OBD-II DTC clear
+T 7E0 04
+R 7E8 44

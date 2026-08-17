@@ -26,6 +26,11 @@ edition = "2021"
 # iced 0.14 → wgpu 27 requires Rust 1.88+
 rust-version = "1.88"
 
+# LZSS is a tight byte-at-a-time loop; at opt-level 0 the compression tests
+# dominate `cargo test` wall time (~167 s -> ~25 s with this).
+[profile.dev.package.mqb-lzss]
+opt-level = 3
+
 [workspace.dependencies]
 # Internal
 mqb-bytes    = { path = "crates/mqb-bytes" }

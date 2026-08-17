@@ -45,24 +45,42 @@ pub fn read_f32_le(data: &[u8], off: usize) -> f32 {
 #[inline]
 pub fn read_u64_le(data: &[u8], off: usize) -> u64 {
     u64::from_le_bytes([
-        data[off], data[off + 1], data[off + 2], data[off + 3],
-        data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+        data[off],
+        data[off + 1],
+        data[off + 2],
+        data[off + 3],
+        data[off + 4],
+        data[off + 5],
+        data[off + 6],
+        data[off + 7],
     ])
 }
 
 #[inline]
 pub fn read_i64_le(data: &[u8], off: usize) -> i64 {
     i64::from_le_bytes([
-        data[off], data[off + 1], data[off + 2], data[off + 3],
-        data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+        data[off],
+        data[off + 1],
+        data[off + 2],
+        data[off + 3],
+        data[off + 4],
+        data[off + 5],
+        data[off + 6],
+        data[off + 7],
     ])
 }
 
 #[inline]
 pub fn read_f64_le(data: &[u8], off: usize) -> f64 {
     f64::from_le_bytes([
-        data[off], data[off + 1], data[off + 2], data[off + 3],
-        data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+        data[off],
+        data[off + 1],
+        data[off + 2],
+        data[off + 3],
+        data[off + 4],
+        data[off + 5],
+        data[off + 6],
+        data[off + 7],
     ])
 }
 

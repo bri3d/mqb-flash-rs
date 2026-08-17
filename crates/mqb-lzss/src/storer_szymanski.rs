@@ -41,7 +41,10 @@ fn find_match(
     lookahead_head: usize,
     lookahead_len: usize,
 ) -> Match {
-    let mut best = Match { offset: 0, length: 0 };
+    let mut best = Match {
+        offset: 0,
+        length: 0,
+    };
 
     for i in 0..WINDOW_SIZE {
         let mut k = 0;
@@ -156,8 +159,8 @@ pub fn encode(input: &[u8], padding: Padding) -> Vec<u8> {
     if !encoded_data.is_empty() {
         if padding == Padding::Exact {
             let total_size = compressed_size + encoded_data.len() + 1;
-            if total_size % 16 != 0 {
-                while (compressed_size + encoded_data.len() + 1) % 16 != 0 {
+            if !total_size.is_multiple_of(16) {
+                while !(compressed_size + encoded_data.len() + 1).is_multiple_of(16) {
                     if flag_pos == 0x00 {
                         break;
                     }
@@ -182,12 +185,12 @@ pub fn encode(input: &[u8], padding: Padding) -> Vec<u8> {
         Padding::Exact => {
             let remainder = 16 - (compressed_size % 16);
             let padding_lengths: [usize; 17] = [
-                0x0, 0x1, 0x12, 0x3, 0x14, 0x5, 0x16, 0x7,
-                0x18, 0x9, 0x1A, 0xB, 0x1C, 0xD, 0x1E, 0xF, 0x0,
+                0x0, 0x1, 0x12, 0x3, 0x14, 0x5, 0x16, 0x7, 0x18, 0x9, 0x1A, 0xB, 0x1C, 0xD, 0x1E,
+                0xF, 0x0,
             ];
             let padding_block: [u8; 17] = [
-                0xFF, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-                0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+                0xFF, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+                0x0,
             ];
             let r = padding_lengths[remainder];
             for i in 0..r {
@@ -196,7 +199,7 @@ pub fn encode(input: &[u8], padding: Padding) -> Vec<u8> {
         }
         Padding::AesBlock | Padding::None => {
             if padding == Padding::AesBlock {
-                while compressed_size % 16 != 0 {
+                while !compressed_size.is_multiple_of(16) {
                     output.push(0x00);
                     compressed_size += 1;
                 }

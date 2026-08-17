@@ -1,7 +1,7 @@
 //! Read CHARACTERISTIC values from ECU binary data using A2L definitions.
 
-use mqb_bytes::*;
 use crate::types::*;
+use mqb_bytes::*;
 
 /// Address mapping entry: `(ecu_base_address, binary_file_offset, block_length)`.
 pub type AddressMap = Vec<(u32, usize, usize)>;
@@ -24,7 +24,10 @@ pub fn make_resolver(map: &AddressMap) -> impl Fn(u32) -> Option<usize> + '_ {
 pub enum CharacteristicValues {
     Scalar(f64),
     Ascii(String),
-    Curve { x: Vec<f64>, y: Vec<f64> },
+    Curve {
+        x: Vec<f64>,
+        y: Vec<f64>,
+    },
     Map {
         x: Vec<f64>,
         y: Vec<f64>,
@@ -76,7 +79,11 @@ fn read_value(
 ) -> Option<CharacteristicValues> {
     let fnc = layout.fnc_values.as_ref()?;
     let raw = read_raw(binary, base, fnc.datatype)?;
-    Some(CharacteristicValues::Scalar(apply_conv(raw, &ch.compu_method_ref, a2l)))
+    Some(CharacteristicValues::Scalar(apply_conv(
+        raw,
+        &ch.compu_method_ref,
+        a2l,
+    )))
 }
 
 // ── CURVE (1D) ──────────────────────────────────────────────────────────────
@@ -98,7 +105,11 @@ fn read_curve(
     let mut y = Vec::with_capacity(count);
     let mut off = base + fnc_offset;
     for _ in 0..count {
-        y.push(apply_conv(read_raw(binary, off, fnc.datatype)?, &ch.compu_method_ref, a2l));
+        y.push(apply_conv(
+            read_raw(binary, off, fnc.datatype)?,
+            &ch.compu_method_ref,
+            a2l,
+        ));
         off += fnc.datatype.byte_width();
     }
 
@@ -135,7 +146,13 @@ fn read_map(
         (x, y, 0)
     } else {
         // Mixed or STD_AXIS — read inline
-        let ir = read_inline(layout, binary, base, axis_x.max_axis_points as usize, axis_y.max_axis_points as usize)?;
+        let ir = read_inline(
+            layout,
+            binary,
+            base,
+            axis_x.max_axis_points as usize,
+            axis_y.max_axis_points as usize,
+        )?;
         let x = apply_conv_vec(&ir.x_values, &axis_x.compu_method_ref, a2l);
         let y = apply_conv_vec(&ir.y_values, &axis_y.compu_method_ref, a2l);
         (x, y, ir.fnc_offset)
@@ -150,7 +167,11 @@ fn read_map(
     let mut flat = Vec::with_capacity(total);
     let mut off = base + fnc_offset;
     for _ in 0..total {
-        flat.push(apply_conv(read_raw(binary, off, fnc.datatype)?, &ch.compu_method_ref, a2l));
+        flat.push(apply_conv(
+            read_raw(binary, off, fnc.datatype)?,
+            &ch.compu_method_ref,
+            a2l,
+        ));
         off += w;
     }
 
@@ -166,7 +187,11 @@ fn read_map(
         z.push(row);
     }
 
-    Some(CharacteristicValues::Map { x: x_phys, y: y_phys, z })
+    Some(CharacteristicValues::Map {
+        x: x_phys,
+        y: y_phys,
+        z,
+    })
 }
 
 // ── CUBOID (3D) ─────────────────────────────────────────────────────────
@@ -199,7 +224,11 @@ fn read_cuboid(
     let mut flat = Vec::with_capacity(total);
     let mut off = base;
     for _ in 0..total {
-        flat.push(apply_conv(read_raw(binary, off, fnc.datatype)?, &ch.compu_method_ref, a2l));
+        flat.push(apply_conv(
+            read_raw(binary, off, fnc.datatype)?,
+            &ch.compu_method_ref,
+            a2l,
+        ));
         off += w;
     }
 
@@ -273,7 +302,9 @@ fn read_val_blk(
                 if let Some(list) = &axis.fix_axis_par_list {
                     list.len()
                 } else {
-                    axis.fix_axis_par_dist.as_ref().map(|d| d.count as usize)
+                    axis.fix_axis_par_dist
+                        .as_ref()
+                        .map(|d| d.count as usize)
                         .unwrap_or(axis.max_axis_points as usize)
                 }
             }
@@ -292,7 +323,11 @@ fn read_val_blk(
     let mut vals = Vec::with_capacity(count);
     let mut off = base;
     for _ in 0..count {
-        vals.push(apply_conv(read_raw(binary, off, fnc.datatype)?, &ch.compu_method_ref, a2l));
+        vals.push(apply_conv(
+            read_raw(binary, off, fnc.datatype)?,
+            &ch.compu_method_ref,
+            a2l,
+        ));
         off += fnc.datatype.byte_width();
     }
 
@@ -301,14 +336,11 @@ fn read_val_blk(
 
 // ── ASCII ───────────────────────────────────────────────────────────────────
 
-fn read_ascii(
-    layout: &RecordLayout,
-    binary: &[u8],
-    base: usize,
-) -> Option<CharacteristicValues> {
+fn read_ascii(layout: &RecordLayout, binary: &[u8], base: usize) -> Option<CharacteristicValues> {
     // ASCII characteristics typically use a fixed number of bytes.
     // Without an explicit count, try the fix_no_axis_pts_x or use a reasonable max.
-    let count = layout.fix_no_axis_pts_x
+    let count = layout
+        .fix_no_axis_pts_x
         .or_else(|| layout.fnc_values.as_ref().map(|_| 32))
         .unwrap_or(32) as usize;
     let end = (base + count).min(binary.len());
@@ -373,7 +405,10 @@ fn read_com_axis(
     }
 
     // Read axis values
-    let dt = pts_layout.axis_pts_x.as_ref().map(|f| f.datatype)
+    let dt = pts_layout
+        .axis_pts_x
+        .as_ref()
+        .map(|f| f.datatype)
         .or_else(|| pts_layout.fnc_values.as_ref().map(|f| f.datatype))?;
 
     let mut raw_vals = Vec::with_capacity(count);
@@ -414,14 +449,30 @@ fn read_inline(
     default_y: usize,
 ) -> Option<InlineResult> {
     #[derive(Clone, Copy)]
-    enum Tag { NapX, ApX, NapY, ApY, Fnc }
+    enum Tag {
+        NapX,
+        ApX,
+        NapY,
+        ApY,
+        Fnc,
+    }
 
     let mut fields: Vec<(u16, Tag, DataType)> = Vec::new();
-    if let Some(f) = &layout.no_axis_pts_x { fields.push((f.position, Tag::NapX, f.datatype)); }
-    if let Some(f) = &layout.axis_pts_x { fields.push((f.position, Tag::ApX, f.datatype)); }
-    if let Some(f) = &layout.no_axis_pts_y { fields.push((f.position, Tag::NapY, f.datatype)); }
-    if let Some(f) = &layout.axis_pts_y { fields.push((f.position, Tag::ApY, f.datatype)); }
-    if let Some(f) = &layout.fnc_values { fields.push((f.position, Tag::Fnc, f.datatype)); }
+    if let Some(f) = &layout.no_axis_pts_x {
+        fields.push((f.position, Tag::NapX, f.datatype));
+    }
+    if let Some(f) = &layout.axis_pts_x {
+        fields.push((f.position, Tag::ApX, f.datatype));
+    }
+    if let Some(f) = &layout.no_axis_pts_y {
+        fields.push((f.position, Tag::NapY, f.datatype));
+    }
+    if let Some(f) = &layout.axis_pts_y {
+        fields.push((f.position, Tag::ApY, f.datatype));
+    }
+    if let Some(f) = &layout.fnc_values {
+        fields.push((f.position, Tag::Fnc, f.datatype));
+    }
     fields.sort_by_key(|f| f.0);
 
     let mut offset = 0usize;
@@ -460,14 +511,20 @@ fn read_inline(
         }
     }
 
-    Some(InlineResult { x_values, y_values, fnc_offset })
+    Some(InlineResult {
+        x_values,
+        y_values,
+        fnc_offset,
+    })
 }
 
 // ── Raw value reading ───────────────────────────────────────────────────────
 
 fn read_raw(data: &[u8], offset: usize, dt: DataType) -> Option<f64> {
     let w = dt.byte_width();
-    if offset + w > data.len() { return None; }
+    if offset + w > data.len() {
+        return None;
+    }
     Some(match dt {
         DataType::UByte => data[offset] as f64,
         DataType::SByte => data[offset] as i8 as f64,

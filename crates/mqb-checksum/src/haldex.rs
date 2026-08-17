@@ -4,9 +4,9 @@
 //! Checksum stored as u16 LE at `checksum_block_location[block_num] + 0x08`.
 //! The checksum covers all data except the 2-byte checksum and 8 preceding header bytes.
 
-use std::borrow::Cow;
 use mqb_bytes::{read_u16_le, write_u16_le};
 use mqb_modules::{ChecksumState, FlashInfo};
+use std::borrow::Cow;
 
 /// Validate (and optionally fix) a Haldex block 16-bit checksum.
 pub fn validate_haldex<'a>(
@@ -33,7 +33,10 @@ pub fn validate_haldex<'a>(
 
     // Sum all u16 LE words, excluding the checksum block region [checksum_location .. checksum_location + 0xA]
     let mut sum: u16 = 0;
-    for chunk in data[..checksum_location].chunks_exact(2).chain(data[checksum_location + 0xA..].chunks_exact(2)) {
+    for chunk in data[..checksum_location]
+        .chunks_exact(2)
+        .chain(data[checksum_location + 0xA..].chunks_exact(2))
+    {
         let word = read_u16_le(chunk, 0);
         sum = sum.wrapping_add(word);
     }

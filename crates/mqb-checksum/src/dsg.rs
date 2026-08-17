@@ -1,8 +1,8 @@
 //! DSG JAMCRC — `0xFFFFFFFF - crc32(data[..-4])`, stored little-endian.
 
-use std::borrow::Cow;
 use mqb_bytes::{read_u32_le, write_u32_le};
 use mqb_modules::ChecksumState;
+use std::borrow::Cow;
 
 /// Validate (and optionally fix) a DSG JAMCRC block checksum.
 ///

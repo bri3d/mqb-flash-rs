@@ -1,14 +1,14 @@
 //! Crypto implementations: AES-128-CBC, SimosXOR, DSG substitution, and no-op.
 
 mod aes_impl;
-mod simos_xor;
 mod dsg;
 mod none;
+mod simos_xor;
 
 pub use aes_impl::AesCrypto;
-pub use simos_xor::SimosXorCrypto;
 pub use dsg::DsgCrypto;
 pub use none::NoCrypto;
+pub use simos_xor::SimosXorCrypto;
 
 /// Encrypt/decrypt a flash block.
 ///

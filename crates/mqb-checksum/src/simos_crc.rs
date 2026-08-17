@@ -2,9 +2,9 @@
 //!
 //! This is NOT the same as the standard zlib CRC32
 
-use std::borrow::Cow;
 use mqb_bytes::{read_u32_le, write_u32_le};
 use mqb_modules::{ChecksumState, FlashInfo};
+use std::borrow::Cow;
 
 /// CRC table generated for poly 0x04C11DB7, MSB-first (non-reflected).
 static CRC_TABLE: [u32; 256] = [

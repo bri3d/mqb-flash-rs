@@ -14,7 +14,53 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Correctness gate. `build` only ever produced binaries — nothing ran the test
+  # suite or clippy, so a regression could ship green. This job is the gate.
+  check:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev libvulkan-dev
+
+      # Formatting is checked on one OS only — it is platform-independent, and
+      # running it twice just doubles the failure noise.
+      - name: Formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # socketcan is Linux-only and cfg-gated on `all(target_os = "linux", feature)`.
+      # Compile it explicitly so the gate cannot rot unnoticed.
+      - name: Check socketcan feature (Linux)
+        if: runner.os == 'Linux'
+        run: cargo check -p mqb-flash-uds --features socketcan --all-targets
+
+      # j2534 is Windows-only in practice; same reasoning.
+      - name: Check j2534 feature (Windows)
+        if: runner.os == 'Windows'
+        run: cargo check -p mqb-flash-uds --features j2534 --all-targets
+
   build:
+    needs: check
     permissions:
       contents: read
     strategy:

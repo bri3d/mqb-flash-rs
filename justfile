@@ -20,12 +20,36 @@ check:
 test:
     cargo test --workspace --target {{x64}}
 
+# Reformat every crate
+fmt:
+    cargo fmt --all
+
+# Verify formatting without changing anything (what CI enforces)
+fmt-check:
+    cargo fmt --all --check
+
+# Lint with warnings as errors (what CI enforces)
+clippy:
+    cargo clippy --workspace --all-targets -- -D warnings
+
+# An ordinary `cargo check` never compiles the feature-gated j2534 adapters, so
+# their cfg gate can rot unnoticed. The socketcan equivalent is Linux-only and
+# is covered in CI instead.
+
+# Compile the feature-gated j2534 adapters
+check-j2534:
+    cargo check -p mqb-flash-uds --features j2534 --all-targets --target {{x64}}
+
+# Everything CI gates on, in one command. Run this before pushing.
+ci: fmt-check clippy test check-j2534
+
 # Build 64-bit release binaries (CLI + GUI + Logger + A2L Viewer)
 build-x64:
     cargo build --release --package mqb-flash-cli --package mqb-flash-gui --package mqb-logger-gui --package mqb-a2l-viewer --features mqb-flash-cli/j2534,mqb-flash-gui/j2534 --target {{x64}}
 
-# Build 32-bit release binaries (CLI + GUI)
 # First-time setup: rustup target add i686-pc-windows-msvc
+
+# Build 32-bit release binaries (CLI + GUI)
 build-x86:
     cargo build --release --package mqb-flash-cli --package mqb-flash-gui --features mqb-flash-cli/j2534,mqb-flash-gui/j2534 --target {{x86}}
 

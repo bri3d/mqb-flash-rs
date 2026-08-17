@@ -37,8 +37,16 @@ impl std::fmt::Display for Interface {
         match self {
             Interface::SocketCan(ifname) => write!(f, "socketcan:{ifname}"),
             Interface::Panda => write!(f, "panda"),
-            Interface::J2534 { dll, bitrate, native_isotp } => {
-                let prefix = if *native_isotp { "j2534-isotp" } else { "j2534" };
+            Interface::J2534 {
+                dll,
+                bitrate,
+                native_isotp,
+            } => {
+                let prefix = if *native_isotp {
+                    "j2534-isotp"
+                } else {
+                    "j2534"
+                };
                 match (dll, bitrate) {
                     (None, 500_000) => write!(f, "{prefix}"),
                     (Some(path), 500_000) => write!(f, "{prefix}:{path}"),
@@ -89,7 +97,11 @@ impl std::str::FromStr for Interface {
 /// * `":<dll_path>:<bitrate>"` — specific DLL, custom bitrate
 fn parse_j2534(rest: &str, native_isotp: bool) -> Result<Interface, String> {
     if rest.is_empty() {
-        return Ok(Interface::J2534 { dll: None, bitrate: 500_000, native_isotp });
+        return Ok(Interface::J2534 {
+            dll: None,
+            bitrate: 500_000,
+            native_isotp,
+        });
     }
     let rest = rest.strip_prefix(':').ok_or_else(|| {
         "j2534 interface must be 'j2534[:<dll>][:<bitrate>]' or 'j2534-isotp[:<dll>][:<bitrate>]'"
@@ -99,7 +111,11 @@ fn parse_j2534(rest: &str, native_isotp: bool) -> Result<Interface, String> {
     // Split on the last ':' so Windows paths like "C:\foo\bar.dll:250000" work.
     // A bare bitrate after '::' (empty dll) is also handled.
     if rest.is_empty() {
-        return Ok(Interface::J2534 { dll: None, bitrate: 500_000, native_isotp });
+        return Ok(Interface::J2534 {
+            dll: None,
+            bitrate: 500_000,
+            native_isotp,
+        });
     }
 
     // Check if the last colon-separated segment is a pure number (bitrate).
@@ -107,8 +123,16 @@ fn parse_j2534(rest: &str, native_isotp: bool) -> Result<Interface, String> {
         let maybe_rate = &rest[colon_pos + 1..];
         if let Ok(rate) = maybe_rate.parse::<u32>() {
             let dll_part = &rest[..colon_pos];
-            let dll = if dll_part.is_empty() { None } else { Some(dll_part.to_owned()) };
-            return Ok(Interface::J2534 { dll, bitrate: rate, native_isotp });
+            let dll = if dll_part.is_empty() {
+                None
+            } else {
+                Some(dll_part.to_owned())
+            };
+            return Ok(Interface::J2534 {
+                dll,
+                bitrate: rate,
+                native_isotp,
+            });
         }
     }
 

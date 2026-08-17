@@ -23,6 +23,40 @@ pub enum ChecksumKind {
     Haldex,
 }
 
+/// How a block's payload is turned into the bytes that go on the wire.
+///
+/// This is per-ECU-family, not per-block, and it must agree with the
+/// `dataFormatIdentifier` nibbles the ECU is told in RequestDownload
+/// (`FlashInfo::compression_type` / `encryption_type`). Getting it wrong means
+/// the ECU's decompressor reads the payload under the wrong rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockPrep {
+    /// LZSS-compress, then zero-pad the compressed stream up to a 16-byte
+    /// boundary, then encrypt. Simos family.
+    LzssAesBlock,
+    /// LZSS-compress with **no** trailing padding, then encrypt. DQ250.
+    ///
+    /// The DSG substitution cipher is byte-wise, so block padding is not
+    /// required — and the pad bytes would be read as flag/literal data.
+    LzssNone,
+    /// LZSS-compress with "exact" padding — trailing bytes are emitted as
+    /// compression commands so they do not inflate the decompressed length —
+    /// then encrypt. DQ381.
+    LzssExact,
+    /// Send the block bytes verbatim; no compression at all. Haldex.
+    Raw,
+}
+
+/// How the 4-byte checksum argument of the UDS `0x0202` routine is produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UdsChecksumKind {
+    /// Look it up in [`FlashInfo::block_checksums`]. Simos family, DQ250.
+    Static,
+    /// zlib CRC-32 of the plain (uncompressed, checksum-corrected) block bytes,
+    /// big-endian. DQ381, Haldex.
+    Crc32Be,
+}
+
 /// Raw block data as read from a binary or FRF/ODX file.
 #[derive(Debug, Clone)]
 pub struct BlockData {
@@ -33,7 +67,11 @@ pub struct BlockData {
 
 impl BlockData {
     pub fn with_name(block_number: u8, block_bytes: Vec<u8>, name: &str) -> Self {
-        Self { block_number, block_bytes, block_name: Some(name.to_owned()) }
+        Self {
+            block_number,
+            block_bytes,
+            block_name: Some(name.to_owned()),
+        }
     }
 }
 
@@ -48,6 +86,13 @@ pub struct PreparedBlockData {
     pub should_erase: bool,
     pub uds_checksum: [u8; 4],
     pub block_name: String,
+    /// Uncompressed size announced to the ECU in RequestDownload.
+    ///
+    /// This is **not** `block_encrypted_bytes.len()` — the ECU is told how much
+    /// data it will have after decompression. For modules with dynamic block
+    /// lengths (Haldex) it must come from the block header, not the static
+    /// `block_lengths` table, which is only a default.
+    pub announced_length: u32,
 }
 
 /// Result of a checksum validation or fix attempt.
@@ -74,8 +119,10 @@ pub struct ControlModuleIdentifier {
 }
 
 /// Standard Simos ECU identifiers (0x7E8 / 0x7E0).
-pub const ECU_CONTROL_MODULE_IDENTIFIER: ControlModuleIdentifier =
-    ControlModuleIdentifier { rxid: 0x7E8, txid: 0x7E0 };
+pub const ECU_CONTROL_MODULE_IDENTIFIER: ControlModuleIdentifier = ControlModuleIdentifier {
+    rxid: 0x7E8,
+    txid: 0x7E0,
+};
 
 /// Information needed to patch an ASW block using WriteWithoutErase.
 pub struct PatchInfo {
@@ -129,6 +176,39 @@ pub struct FlashInfo {
     /// the offset within each block's data region where the actual length is stored as u32 LE.
     /// Empty for all other modules (static lengths only).
     pub dynamic_block_length_offsets: &'static [(u8, usize)],
+
+    // ── Block-preparation policy ─────────────────────────────────────────────
+    // These six fields exist because every one of them differs between the
+    // Simos family and the transmission/AWD modules. Before they existed, all
+    // call sites hardcoded the Simos values, which put the wrong
+    // dataFormatIdentifier, the wrong padding and the wrong erase decision on
+    // the wire for DQ250, DQ381 and Haldex.
+    /// Compression nibble of the RequestDownload `dataFormatIdentifier`
+    /// (high nibble of the byte; `0xA` = LZSS, `0x1` = DSG LZSS, `0x0` = none).
+    pub compression_type: u8,
+    /// Encryption nibble of the RequestDownload `dataFormatIdentifier` (low nibble).
+    pub encryption_type: u8,
+    /// How to turn raw block bytes into the wire payload. Must agree with
+    /// `compression_type` / `encryption_type`.
+    pub block_prep: BlockPrep,
+    /// Blocks numbered `<= no_erase_max_block` are **not** erased before download.
+    ///
+    /// `0` erases every block (Simos, DQ381). DQ250 uses `2` to protect DRIVER;
+    /// Haldex uses `1` for the same reason. Erasing a driver/bootstrap block
+    /// that the ECU expects to be intact is not recoverable over UDS.
+    pub no_erase_max_block: u8,
+    /// How the UDS `0x0202` checksum argument is produced.
+    pub uds_checksum_kind: UdsChecksumKind,
+    /// Default ISO-TP STmin in microseconds, used when the caller supplies no
+    /// override. Simos tolerates 400 µs; the transmission and AWD modules need 900 µs.
+    pub default_stmin_us: u32,
+    /// Blocks that must **not** have an internal checksum computed over them.
+    ///
+    /// DQ250's DRIVER block (2) carries a different checksum mechanism that is
+    /// supplied externally — running the DSG JAMCRC over it overwrites four
+    /// bytes of real code. Haldex's DRIVER block (1) likewise has no checksum
+    /// region. Empty for every other module.
+    pub no_internal_checksum_blocks: &'static [u8],
 }
 
 impl FlashInfo {
@@ -149,9 +229,7 @@ impl FlashInfo {
             let binfile_offset = self.binfile_offset(block_num)?;
             let addr = binfile_offset + header_offset;
             if addr + 4 <= full_bin.len() {
-                let len = u32::from_le_bytes(
-                    full_bin[addr..addr + 4].try_into().unwrap(),
-                ) as usize;
+                let len = u32::from_le_bytes(full_bin[addr..addr + 4].try_into().unwrap()) as usize;
                 if len > 0 && binfile_offset + len <= full_bin.len() {
                     return Some(len);
                 }
@@ -215,53 +293,245 @@ impl FlashInfo {
             return Some(n);
         }
         // Fall back to FRF names (e.g. "FD_01DATA" from ODX extraction)
-        self.block_names_frf.iter().find(|(_, s)| s.to_uppercase() == upper).map(|(n, _)| *n)
+        self.block_names_frf
+            .iter()
+            .find(|(_, s)| s.to_uppercase() == upper)
+            .map(|(n, _)| *n)
     }
 
     /// Convert a block number to its canonical name.
     pub fn block_number_to_name(&self, num: u8) -> Option<&'static str> {
-        self.block_name_to_number.iter().find(|(_, n)| *n == num).map(|(s, _)| *s)
+        self.block_name_to_number
+            .iter()
+            .find(|(_, n)| *n == num)
+            .map(|(s, _)| *s)
+    }
+
+    /// Whether this block must be erased before its download.
+    pub fn should_erase(&self, block_num: u8) -> bool {
+        block_num > self.no_erase_max_block
+    }
+
+    /// The uncompressed size to announce in RequestDownload for a block whose
+    /// raw (decompressed, pre-encryption) payload is `raw_len` bytes.
+    ///
+    /// For modules with dynamic block lengths the raw slice we hold *is* the
+    /// block — `blocks_from_bytes` already resolved the length from the block
+    /// header — so its length is authoritative and the static table is only a
+    /// fallback. For every other module the static table wins, which preserves
+    /// the existing behaviour for partial/individually-supplied block files.
+    pub fn announced_length(&self, block_num: u8, raw_len: usize) -> usize {
+        if self.dynamic_block_length_offsets.is_empty() {
+            self.block_length(block_num).unwrap_or(raw_len)
+        } else {
+            raw_len
+        }
+    }
+
+    /// The `dataFormatIdentifier` byte sent in RequestDownload.
+    pub fn data_format_identifier(&self) -> u8 {
+        (self.compression_type << 4) | self.encryption_type
+    }
+
+    /// Whether an internal checksum may be computed over this block.
+    ///
+    /// Returns `false` for driver/bootstrap blocks whose last bytes are real
+    /// code rather than a checksum field — writing one there corrupts them.
+    pub fn has_internal_checksum(&self, block_num: u8) -> bool {
+        !self.no_internal_checksum_blocks.contains(&block_num)
     }
 }
 
 /// Well-known UDS Data Identifiers used across all VW ECUs.
 pub static DATA_RECORDS: &[DataRecord] = &[
-    DataRecord { address: 0xF190, parse_type: 0, description: "VIN Vehicle Identification Number" },
-    DataRecord { address: 0xF19E, parse_type: 0, description: "ASAM/ODX File Identifier" },
-    DataRecord { address: 0xF1A2, parse_type: 0, description: "ASAM/ODX File Version" },
-    DataRecord { address: 0xF40D, parse_type: 1, description: "Vehicle Speed" },
-    DataRecord { address: 0xF806, parse_type: 1, description: "Calibration Verification Numbers" },
-    DataRecord { address: 0xF187, parse_type: 0, description: "VW Spare Part Number" },
-    DataRecord { address: 0xF189, parse_type: 0, description: "VW Application Software Version Number" },
-    DataRecord { address: 0xF191, parse_type: 0, description: "VW ECU Hardware Number" },
-    DataRecord { address: 0xF1A3, parse_type: 0, description: "VW ECU Hardware Version Number" },
-    DataRecord { address: 0xF197, parse_type: 0, description: "VW System Name Or Engine Type" },
-    DataRecord { address: 0xF1AD, parse_type: 0, description: "Engine Code Letters" },
-    DataRecord { address: 0xF1AA, parse_type: 0, description: "VW Workshop System Name" },
-    DataRecord { address: 0x0405, parse_type: 1, description: "State Of Flash Memory" },
-    DataRecord { address: 0x0407, parse_type: 1, description: "VW Logical Software Block Counter Of Programming Attempts" },
-    DataRecord { address: 0x0408, parse_type: 1, description: "VW Logical Software Block Counter Of Successful Programming Attempts" },
-    DataRecord { address: 0x0600, parse_type: 1, description: "VW Coding Value" },
-    DataRecord { address: 0xF186, parse_type: 1, description: "Active Diagnostic Session" },
-    DataRecord { address: 0xF18C, parse_type: 0, description: "ECU Serial Number" },
-    DataRecord { address: 0xF17C, parse_type: 0, description: "VW FAZIT Identification String" },
-    DataRecord { address: 0xF442, parse_type: 1, description: "Control Module Voltage" },
-    DataRecord { address: 0xEF90, parse_type: 1, description: "Immobilizer Status SHE" },
-    DataRecord { address: 0xF1F4, parse_type: 0, description: "Boot Loader Identification" },
-    DataRecord { address: 0xF1DF, parse_type: 1, description: "ECU Programming Information" },
-    DataRecord { address: 0xF1F1, parse_type: 1, description: "Tuning Protection SO2" },
-    DataRecord { address: 0xF1E0, parse_type: 1, description: "" },
-    DataRecord { address: 0x12FC, parse_type: 1, description: "" },
-    DataRecord { address: 0x12FF, parse_type: 1, description: "" },
-    DataRecord { address: 0xFD52, parse_type: 1, description: "" },
-    DataRecord { address: 0xFD83, parse_type: 1, description: "" },
-    DataRecord { address: 0xFDFA, parse_type: 1, description: "" },
-    DataRecord { address: 0xFDFC, parse_type: 1, description: "" },
-    DataRecord { address: 0x295A, parse_type: 1, description: "Vehicle Mileage" },
-    DataRecord { address: 0x295B, parse_type: 1, description: "Control Module Mileage" },
-    DataRecord { address: 0xF15B, parse_type: 1, description: "Fingerprint and Programming Date" },
-    DataRecord { address: 0xF1A5, parse_type: 1, description: "VW Coding Repair Shop Code Or Serial Number (Coding Fingerprint)" },
-    DataRecord { address: 0xF1AB, parse_type: 0, description: "VW Logical Software Block Version" },
-    DataRecord { address: 0xF804, parse_type: 0, description: "Calibration ID" },
-    DataRecord { address: 0xF17E, parse_type: 0, description: "ECU Production Change Number" },
+    DataRecord {
+        address: 0xF190,
+        parse_type: 0,
+        description: "VIN Vehicle Identification Number",
+    },
+    DataRecord {
+        address: 0xF19E,
+        parse_type: 0,
+        description: "ASAM/ODX File Identifier",
+    },
+    DataRecord {
+        address: 0xF1A2,
+        parse_type: 0,
+        description: "ASAM/ODX File Version",
+    },
+    DataRecord {
+        address: 0xF40D,
+        parse_type: 1,
+        description: "Vehicle Speed",
+    },
+    DataRecord {
+        address: 0xF806,
+        parse_type: 1,
+        description: "Calibration Verification Numbers",
+    },
+    DataRecord {
+        address: 0xF187,
+        parse_type: 0,
+        description: "VW Spare Part Number",
+    },
+    DataRecord {
+        address: 0xF189,
+        parse_type: 0,
+        description: "VW Application Software Version Number",
+    },
+    DataRecord {
+        address: 0xF191,
+        parse_type: 0,
+        description: "VW ECU Hardware Number",
+    },
+    DataRecord {
+        address: 0xF1A3,
+        parse_type: 0,
+        description: "VW ECU Hardware Version Number",
+    },
+    DataRecord {
+        address: 0xF197,
+        parse_type: 0,
+        description: "VW System Name Or Engine Type",
+    },
+    DataRecord {
+        address: 0xF1AD,
+        parse_type: 0,
+        description: "Engine Code Letters",
+    },
+    DataRecord {
+        address: 0xF1AA,
+        parse_type: 0,
+        description: "VW Workshop System Name",
+    },
+    DataRecord {
+        address: 0x0405,
+        parse_type: 1,
+        description: "State Of Flash Memory",
+    },
+    DataRecord {
+        address: 0x0407,
+        parse_type: 1,
+        description: "VW Logical Software Block Counter Of Programming Attempts",
+    },
+    DataRecord {
+        address: 0x0408,
+        parse_type: 1,
+        description: "VW Logical Software Block Counter Of Successful Programming Attempts",
+    },
+    DataRecord {
+        address: 0x0600,
+        parse_type: 1,
+        description: "VW Coding Value",
+    },
+    DataRecord {
+        address: 0xF186,
+        parse_type: 1,
+        description: "Active Diagnostic Session",
+    },
+    DataRecord {
+        address: 0xF18C,
+        parse_type: 0,
+        description: "ECU Serial Number",
+    },
+    DataRecord {
+        address: 0xF17C,
+        parse_type: 0,
+        description: "VW FAZIT Identification String",
+    },
+    DataRecord {
+        address: 0xF442,
+        parse_type: 1,
+        description: "Control Module Voltage",
+    },
+    DataRecord {
+        address: 0xEF90,
+        parse_type: 1,
+        description: "Immobilizer Status SHE",
+    },
+    DataRecord {
+        address: 0xF1F4,
+        parse_type: 0,
+        description: "Boot Loader Identification",
+    },
+    DataRecord {
+        address: 0xF1DF,
+        parse_type: 1,
+        description: "ECU Programming Information",
+    },
+    DataRecord {
+        address: 0xF1F1,
+        parse_type: 1,
+        description: "Tuning Protection SO2",
+    },
+    DataRecord {
+        address: 0xF1E0,
+        parse_type: 1,
+        description: "",
+    },
+    DataRecord {
+        address: 0x12FC,
+        parse_type: 1,
+        description: "",
+    },
+    DataRecord {
+        address: 0x12FF,
+        parse_type: 1,
+        description: "",
+    },
+    DataRecord {
+        address: 0xFD52,
+        parse_type: 1,
+        description: "",
+    },
+    DataRecord {
+        address: 0xFD83,
+        parse_type: 1,
+        description: "",
+    },
+    DataRecord {
+        address: 0xFDFA,
+        parse_type: 1,
+        description: "",
+    },
+    DataRecord {
+        address: 0xFDFC,
+        parse_type: 1,
+        description: "",
+    },
+    DataRecord {
+        address: 0x295A,
+        parse_type: 1,
+        description: "Vehicle Mileage",
+    },
+    DataRecord {
+        address: 0x295B,
+        parse_type: 1,
+        description: "Control Module Mileage",
+    },
+    DataRecord {
+        address: 0xF15B,
+        parse_type: 1,
+        description: "Fingerprint and Programming Date",
+    },
+    DataRecord {
+        address: 0xF1A5,
+        parse_type: 1,
+        description: "VW Coding Repair Shop Code Or Serial Number (Coding Fingerprint)",
+    },
+    DataRecord {
+        address: 0xF1AB,
+        parse_type: 0,
+        description: "VW Logical Software Block Version",
+    },
+    DataRecord {
+        address: 0xF804,
+        parse_type: 0,
+        description: "Calibration ID",
+    },
+    DataRecord {
+        address: 0xF17E,
+        parse_type: 0,
+        description: "ECU Production Change Number",
+    },
 ];

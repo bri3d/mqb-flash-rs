@@ -8,10 +8,10 @@
 //! - **LegacySimos** (`decompress_legacy`): signifier-byte based LZSS.
 //!   Used for Simos8 (very old ECUs).
 
-mod storer_szymanski;
-mod lzss10;
 mod legacy;
+mod lzss10;
+mod storer_szymanski;
 
-pub use storer_szymanski::{encode, decode, Padding};
-pub use lzss10::decompress_lzss10;
 pub use legacy::decompress_legacy;
+pub use lzss10::decompress_lzss10;
+pub use storer_szymanski::{decode, encode, Padding};

@@ -133,25 +133,43 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::DecryptFrf { file, outdir } => cmd_decrypt_frf(&file, &outdir),
-        Commands::ExtractFrf { file, module, output } => {
-            cmd_extract_frf(&file, &module, &output)
-        }
-        Commands::ExtractOdx { file, module, outdir } => {
-            cmd_extract_odx(&file, &module, &outdir)
-        }
-        Commands::SplitBin { module, file, outdir } => cmd_split_bin(&module, &file, &outdir),
-        Commands::CombineBin { module, blocks, output } => {
-            cmd_combine_bin(&module, &blocks, &output)
-        }
-        Commands::Checksum { module, file, output, patch_cboot } => {
-            cmd_checksum(&module, &file, &output, patch_cboot)
-        }
-        Commands::Flash { module, interface, blocks, patch_cboot } => {
-            cmd_flash(&module, &interface, &blocks, patch_cboot).await
-        }
-        Commands::Unlock { file, module, interface } => {
-            cmd_unlock(&file, &module, &interface).await
-        }
+        Commands::ExtractFrf {
+            file,
+            module,
+            output,
+        } => cmd_extract_frf(&file, &module, &output),
+        Commands::ExtractOdx {
+            file,
+            module,
+            outdir,
+        } => cmd_extract_odx(&file, &module, &outdir),
+        Commands::SplitBin {
+            module,
+            file,
+            outdir,
+        } => cmd_split_bin(&module, &file, &outdir),
+        Commands::CombineBin {
+            module,
+            blocks,
+            output,
+        } => cmd_combine_bin(&module, &blocks, &output),
+        Commands::Checksum {
+            module,
+            file,
+            output,
+            patch_cboot,
+        } => cmd_checksum(&module, &file, &output, patch_cboot),
+        Commands::Flash {
+            module,
+            interface,
+            blocks,
+            patch_cboot,
+        } => cmd_flash(&module, &interface, &blocks, patch_cboot).await,
+        Commands::Unlock {
+            file,
+            module,
+            interface,
+        } => cmd_unlock(&file, &module, &interface).await,
         Commands::ReadEcu { module, interface } => cmd_read_ecu(&module, &interface).await,
         Commands::ReadDtcs { module, interface } => cmd_read_dtcs(&module, &interface).await,
     }
@@ -169,21 +187,22 @@ fn get_flash_info(module: &str) -> Result<&'static FlashInfo> {
 fn parse_block_args(block_args: &[String]) -> Result<HashMap<String, PathBuf>> {
     let mut blocks = HashMap::new();
     for arg in block_args {
-        let (name, path_str) = arg.split_once(':').with_context(|| {
-            format!("Block argument '{arg}' must be in 'NAME:PATH' format")
-        })?;
+        let (name, path_str) = arg
+            .split_once(':')
+            .with_context(|| format!("Block argument '{arg}' must be in 'NAME:PATH' format"))?;
         blocks.insert(name.to_owned(), PathBuf::from(path_str));
     }
     Ok(blocks)
 }
 
-
 // ── CLI progress display ─────────────────────────────────────────────────────
 
 /// Spawn a background task that reads [`ProgressUpdate`] events and drives
 /// an indicatif multi-progress bar for the CLI.
-fn spawn_progress_listener(
-) -> (tokio::sync::mpsc::UnboundedSender<ProgressUpdate>, tokio::task::JoinHandle<()>) {
+fn spawn_progress_listener() -> (
+    tokio::sync::mpsc::UnboundedSender<ProgressUpdate>,
+    tokio::task::JoinHandle<()>,
+) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ProgressUpdate>();
 
     let handle = tokio::spawn(async move {
@@ -217,6 +236,12 @@ fn spawn_progress_listener(
                 ProgressUpdate::CheckingPreconditions => {
                     status.set_message("Checking programming preconditions…");
                 }
+                ProgressUpdate::SwitchPatchUsed => {
+                    status.println(
+                        "Programming session refused; SwitchPatch fallback accepted \
+                         (not an unlock indicator)",
+                    );
+                }
                 ProgressUpdate::ProgrammingSession => {
                     status.set_message("Upgrading to programming session…");
                 }
@@ -232,10 +257,7 @@ fn spawn_progress_listener(
                         bar.finish_and_clear();
                         mp.remove(&bar);
                     }
-                    status.set_message(format!(
-                        "Flashing block {name} ({}/{total})…",
-                        index + 1
-                    ));
+                    status.set_message(format!("Flashing block {name} ({}/{total})…", index + 1));
                 }
                 ProgressUpdate::BlockErasing { name } => {
                     status.set_message(format!("Erasing {name}…"));
@@ -243,7 +265,11 @@ fn spawn_progress_listener(
                 ProgressUpdate::BlockDownloading { name } => {
                     status.set_message(format!("Requesting download for {name}…"));
                 }
-                ProgressUpdate::BlockTransferProgress { name, bytes_sent, bytes_total } => {
+                ProgressUpdate::BlockTransferProgress {
+                    name,
+                    bytes_sent,
+                    bytes_total,
+                } => {
                     let bar = transfer_bar.get_or_insert_with(|| {
                         let b = mp.add(ProgressBar::new(*bytes_total as u64));
                         b.set_style(
@@ -297,8 +323,8 @@ fn spawn_progress_listener(
 // ── Command implementations ───────────────────────────────────────────────────
 
 fn cmd_decrypt_frf(file: &Path, outdir: &Path) -> Result<()> {
-    let encrypted = std::fs::read(file)
-        .with_context(|| format!("Reading FRF file: {}", file.display()))?;
+    let encrypted =
+        std::fs::read(file).with_context(|| format!("Reading FRF file: {}", file.display()))?;
     let decrypted = mqb_frf::decrypt_frf(&encrypted);
 
     std::fs::create_dir_all(outdir)?;
@@ -311,34 +337,35 @@ fn cmd_decrypt_frf(file: &Path, outdir: &Path) -> Result<()> {
 
 fn cmd_extract_frf(file: &Path, module: &str, output: &Path) -> Result<()> {
     let flash_info = get_flash_info(module)?;
-    let data = std::fs::read(file)
-        .with_context(|| format!("Reading FRF: {}", file.display()))?;
+    let data = std::fs::read(file).with_context(|| format!("Reading FRF: {}", file.display()))?;
 
-    let frf_contents = mqb_frf::extract_frf(&data)
-        .with_context(|| "Extracting FRF ZIP")?;
+    let frf_contents = mqb_frf::extract_frf(&data).with_context(|| "Extracting FRF ZIP")?;
 
-    let (_, odx_bytes) = frf_contents.iter()
+    let (_, odx_bytes) = frf_contents
+        .iter()
         .find(|(k, _)| k.to_ascii_lowercase().ends_with(".odx"))
         .with_context(|| "FRF does not contain an ODX file (SGO format not yet supported)")?;
 
-    let xml = std::str::from_utf8(odx_bytes)
-        .with_context(|| "ODX entry is not valid UTF-8")?;
-    let (odx_blocks, _boxcodes) = mqb_odx::extract_odx(xml, flash_info)
-        .with_context(|| "Parsing ODX")?;
+    let xml = std::str::from_utf8(odx_bytes).with_context(|| "ODX entry is not valid UTF-8")?;
+    let (odx_blocks, _boxcodes) =
+        mqb_odx::extract_odx(xml, flash_info).with_context(|| "Parsing ODX")?;
 
     anyhow::ensure!(!odx_blocks.is_empty(), "ODX contains no flash blocks");
 
     let mut blocks = HashMap::new();
     for (name, bytes) in odx_blocks {
-        let block_num = flash_info.block_to_number(&name)
+        let block_num = flash_info
+            .block_to_number(&name)
             .with_context(|| format!("Unknown ODX block '{name}'"))?;
         println!("{name}: {} bytes", bytes.len());
-        blocks.insert(name.clone(), mqb_modules::BlockData::with_name(block_num, bytes, &name));
+        blocks.insert(
+            name.clone(),
+            mqb_modules::BlockData::with_name(block_num, bytes, &name),
+        );
     }
 
     let bin = mqb_binfile::bin_from_blocks(&blocks, flash_info);
-    std::fs::write(output, &bin)
-        .with_context(|| format!("Writing {}", output.display()))?;
+    std::fs::write(output, &bin).with_context(|| format!("Writing {}", output.display()))?;
     println!("Written {} bytes to {}", bin.len(), output.display());
     Ok(())
 }
@@ -348,8 +375,8 @@ fn cmd_extract_odx(file: &Path, module: &str, outdir: &Path) -> Result<()> {
     let xml = std::fs::read_to_string(file)
         .with_context(|| format!("Reading ODX file: {}", file.display()))?;
 
-    let (data_blocks, allowed_boxcodes) = mqb_odx::extract_odx(&xml, flash_info)
-        .with_context(|| "Parsing ODX")?;
+    let (data_blocks, allowed_boxcodes) =
+        mqb_odx::extract_odx(&xml, flash_info).with_context(|| "Parsing ODX")?;
 
     println!("Allowed box codes: {}", allowed_boxcodes.join(", "));
 
@@ -364,14 +391,19 @@ fn cmd_extract_odx(file: &Path, module: &str, outdir: &Path) -> Result<()> {
 
 fn cmd_split_bin(module: &str, file: &Path, outdir: &Path) -> Result<()> {
     let flash_info = get_flash_info(module)?;
-    let blocks = mqb_binfile::blocks_from_file(file, flash_info)
-        .with_context(|| "Splitting binary")?;
+    let blocks =
+        mqb_binfile::blocks_from_file(file, flash_info).with_context(|| "Splitting binary")?;
 
     std::fs::create_dir_all(outdir)?;
     for (name, block) in &blocks {
         let out_path = outdir.join(format!("{name}.bin"));
         std::fs::write(&out_path, &block.block_bytes)?;
-        println!("Block {}: {} ({} bytes)", block.block_number, out_path.display(), block.block_bytes.len());
+        println!(
+            "Block {}: {} ({} bytes)",
+            block.block_number,
+            out_path.display(),
+            block.block_bytes.len()
+        );
     }
     Ok(())
 }
@@ -384,7 +416,8 @@ fn cmd_combine_bin(module: &str, block_args: &[String], output: &Path) -> Result
     for (name, path) in &block_files {
         let data = std::fs::read(path)
             .with_context(|| format!("Reading block file: {}", path.display()))?;
-        let block_num = flash_info.block_to_number(name)
+        let block_num = flash_info
+            .block_to_number(name)
             .with_context(|| format!("Unknown block name: '{name}' for module '{module}'"))?;
         blocks.insert(
             name.clone(),
@@ -404,20 +437,23 @@ fn cmd_checksum(module: &str, file: &Path, output: &Path, patch_cboot: bool) -> 
 
     let flash_info = get_flash_info(module)?;
 
-    let mut data = std::fs::read(file)
-        .with_context(|| format!("Reading binary: {}", file.display()))?;
+    let mut data =
+        std::fs::read(file).with_context(|| format!("Reading binary: {}", file.display()))?;
 
     if patch_cboot {
-        let block_num = flash_info.block_to_number("CBOOT")
+        let block_num = flash_info
+            .block_to_number("CBOOT")
             .ok_or_else(|| anyhow::anyhow!("Module '{module}' has no CBOOT block"))?;
-        let offset = flash_info.binfile_offset(block_num)
+        let offset = flash_info
+            .binfile_offset(block_num)
             .ok_or_else(|| anyhow::anyhow!("No binfile offset for CBOOT block"))?;
-        let length = flash_info.block_length(block_num)
+        let length = flash_info
+            .block_length(block_num)
             .ok_or_else(|| anyhow::anyhow!("No block length for CBOOT block"))?;
         let end = offset + length;
         anyhow::ensure!(end <= data.len(), "CBOOT block extends beyond binary");
-        let patched = mqb_cboot::patch_cboot(&data[offset..end])
-            .with_context(|| "CBOOT patch failed")?;
+        let patched =
+            mqb_cboot::patch_cboot(&data[offset..end]).with_context(|| "CBOOT patch failed")?;
         data[offset..end].copy_from_slice(&patched);
         println!("CBOOT: sample mode patch applied");
     }
@@ -427,6 +463,14 @@ fn cmd_checksum(module: &str, file: &Path, output: &Path, patch_cboot: bool) -> 
 
     for (name, block) in &blocks {
         let block_num = block.block_number;
+
+        // Blocks whose checksum is supplied externally must be passed over —
+        // DQ250's DRIVER block is 0x80E bytes of real code, and writing a
+        // JAMCRC into its last four bytes corrupts it.
+        if !flash_info.has_internal_checksum(block_num) {
+            println!("{name}: skipped (checksum supplied externally)");
+            continue;
+        }
 
         let (state, fixed) = match flash_info.checksum_kind {
             ChecksumKind::Dq381 => {
@@ -438,8 +482,12 @@ fn cmd_checksum(module: &str, file: &Path, output: &Path, patch_cboot: bool) -> 
                 validate_dq381(&block.block_bytes, base, true)
             }
             ChecksumKind::Dsg => validate_dsg(&block.block_bytes, true),
-            ChecksumKind::Haldex => validate_haldex(&block.block_bytes, block_num, flash_info, true),
-            ChecksumKind::Simos => mqb_checksum::validate_simos_block(flash_info, &block.block_bytes, block_num, true),
+            ChecksumKind::Haldex => {
+                validate_haldex(&block.block_bytes, block_num, flash_info, true)
+            }
+            ChecksumKind::Simos => {
+                mqb_checksum::validate_simos_block(flash_info, &block.block_bytes, block_num, true)
+            }
         };
 
         match state {
@@ -451,8 +499,14 @@ fn cmd_checksum(module: &str, file: &Path, output: &Path, patch_cboot: bool) -> 
                     data[offset..offset + len].copy_from_slice(&fixed[..len]);
                 }
             }
-            ChecksumState::Invalid => { any_failed = true; println!("{name}: invalid (could not fix)"); }
-            ChecksumState::Failed  => { any_failed = true; println!("{name}: failed"); }
+            ChecksumState::Invalid => {
+                any_failed = true;
+                println!("{name}: invalid (could not fix)");
+            }
+            ChecksumState::Failed => {
+                any_failed = true;
+                println!("{name}: failed");
+            }
         }
     }
 
@@ -477,30 +531,41 @@ async fn cmd_flash(
     let interface: Interface = interface_str.parse().map_err(anyhow::Error::msg)?;
     let block_files = parse_block_args(block_args)?;
 
-    // Load, compress, and encrypt each block
-    let mut blocks: Vec<PreparedBlockData> = Vec::new();
+    // Load every block first: the checksum pass needs to see them together
+    // (ECM3 over CAL can consult ASW1), and it must run before compression.
+    let mut raw: HashMap<u8, Vec<u8>> = HashMap::new();
+    let mut names: HashMap<u8, String> = HashMap::new();
     for (name, path) in &block_files {
-        let data = std::fs::read(path)
-            .with_context(|| format!("Reading block: {}", path.display()))?;
-        let block_num = flash_info.block_to_number(name)
+        let data =
+            std::fs::read(path).with_context(|| format!("Reading block: {}", path.display()))?;
+        let block_num = flash_info
+            .block_to_number(name)
             .with_context(|| format!("Unknown block: '{name}'"))?;
+        raw.insert(block_num, data);
+        names.insert(block_num, name.clone());
+    }
 
-        let encrypted = if block_num <= 5 {
-            mqb_flash_uds::prepare_block_for_flash(&data, flash_info.crypto)
+    // Correct internal checksums (and patch CBOOT if asked). Without this a
+    // modified block goes out with a stale checksum and the ECU rejects it
+    // after the whole transfer — or accepts an image it cannot boot.
+    let report = mqb_flash_uds::checksum_and_patch_blocks(flash_info, &mut raw, patch_cboot)
+        .with_context(|| "Correcting checksums")?;
+    for note in &report.notes {
+        println!("{note}");
+    }
+
+    let mut blocks: Vec<PreparedBlockData> = Vec::new();
+    for (&block_num, data) in &raw {
+        let mut prepared = if block_num <= 5 {
+            mqb_flash_uds::prepare_block(flash_info, block_num, data)
         } else {
-            mqb_flash_uds::prepare_patch_for_flash(&data, flash_info.crypto)
+            mqb_flash_uds::prepare_patch_block(flash_info, block_num, data)
         };
-
-        blocks.push(PreparedBlockData {
-            block_number: block_num,
-            block_encrypted_bytes: encrypted,
-            boxcode: String::new(),
-            encryption_type: 0x0A,
-            compression_type: 0x0A,
-            should_erase: block_num <= 5,
-            uds_checksum: flash_info.block_checksum(block_num).unwrap_or([0; 4]),
-            block_name: name.clone(),
-        });
+        // Preserve the caller's spelling of the block name for the log.
+        if let Some(n) = names.get(&block_num) {
+            prepared.block_name = n.clone();
+        }
+        blocks.push(prepared);
     }
 
     // Flash in block-number order
@@ -518,8 +583,12 @@ async fn cmd_flash(
 
     let result = mqb_flash_uds::flash_blocks(flash_info, blocks, opts).await;
     match &result {
-        Ok(()) => { let _ = progress_tx.send(ProgressUpdate::Complete); }
-        Err(e) => { let _ = progress_tx.send(ProgressUpdate::Error(e.to_string())); }
+        Ok(()) => {
+            let _ = progress_tx.send(ProgressUpdate::Complete);
+        }
+        Err(e) => {
+            let _ = progress_tx.send(ProgressUpdate::Error(e.to_string()));
+        }
     }
     let _ = progress_handle.await;
     result.with_context(|| "Flash failed")?;
@@ -533,19 +602,25 @@ async fn cmd_unlock(firmware_path: &Path, module: &str, interface_str: &str) -> 
     let flash_info = get_flash_info(module)?;
     let interface: Interface = interface_str.parse().map_err(anyhow::Error::msg)?;
 
-    let patch_info = flash_info.patch_info.as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Module '{module}' does not support unlock (no patch_info)"))?;
+    let patch_info = flash_info.patch_info.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("Module '{module}' does not support unlock (no patch_info)")
+    })?;
 
     // Extract raw block data — auto-detect file type by extension
     let raw_blocks = mqb_binfile::load_raw_blocks(firmware_path, flash_info)?;
 
     // Validate box code from CAL (block 5)
-    let cal_bytes = raw_blocks.get(&5)
+    let cal_bytes = raw_blocks
+        .get(&5)
         .ok_or_else(|| anyhow::anyhow!("FRF does not contain CAL (block 5)"))?;
 
-    let (box_start, box_end) = flash_info.box_code_location(5)
+    let (box_start, box_end) = flash_info
+        .box_code_location(5)
         .ok_or_else(|| anyhow::anyhow!("No box_code_location for block 5"))?;
-    anyhow::ensure!(box_end <= cal_bytes.len(), "Box code range out of bounds in CAL block");
+    anyhow::ensure!(
+        box_end <= cal_bytes.len(),
+        "Box code range out of bounds in CAL block"
+    );
 
     let file_box_code = std::str::from_utf8(&cal_bytes[box_start..box_end])
         .with_context(|| "Box code bytes are not valid UTF-8")?
@@ -569,52 +644,35 @@ async fn cmd_unlock(firmware_path: &Path, module: &str, interface_str: &str) -> 
 
     // Blocks 1–4
     for &block_num in normal_order {
-        let raw = raw_blocks.get(&block_num)
+        let raw = raw_blocks
+            .get(&block_num)
             .ok_or_else(|| anyhow::anyhow!("FRF is missing block {block_num}"))?;
-        let encrypted = mqb_flash_uds::prepare_block_for_flash(raw, flash_info.crypto);
-        let name = flash_info.block_number_to_name(block_num)
-            .unwrap_or("UNKNOWN")
-            .to_owned();
-        println!("Prepared block {block_num} ({name}): {} bytes compressed+encrypted", encrypted.len());
-        blocks.push(PreparedBlockData {
-            block_number: block_num,
-            block_encrypted_bytes: encrypted,
-            boxcode: String::new(),
-            encryption_type: 0x0A,
-            compression_type: 0x0A,
-            should_erase: true,
-            uds_checksum: flash_info.block_checksum(block_num).unwrap_or([0; 4]),
-            block_name: name,
-        });
+        let prepared = mqb_flash_uds::prepare_block(flash_info, block_num, raw);
+        println!(
+            "Prepared block {block_num} ({}): {} bytes compressed+encrypted",
+            prepared.block_name,
+            prepared.block_encrypted_bytes.len()
+        );
+        blocks.push(prepared);
     }
 
     // Patch block (pbi+5)
-    let patch_encrypted = mqb_flash_uds::prepare_patch_for_flash(patch_info.patch_bytes, flash_info.crypto);
-    println!("Prepared patch block {patch_block_num}: {} bytes encrypted", patch_encrypted.len());
-    blocks.push(PreparedBlockData {
-        block_number: patch_block_num,
-        block_encrypted_bytes: patch_encrypted,
-        boxcode: String::new(),
-        encryption_type: 0x0A,
-        compression_type: 0x0A,
-        should_erase: false,
-        uds_checksum: [0; 4],
-        block_name: "UNLOCK_PATCH".to_owned(),
-    });
+    let patch =
+        mqb_flash_uds::prepare_patch_block(flash_info, patch_block_num, patch_info.patch_bytes);
+    println!(
+        "Prepared patch block {patch_block_num}: {} bytes encrypted",
+        patch.block_encrypted_bytes.len()
+    );
+    blocks.push(patch);
 
     // CAL (block 5)
-    let cal_encrypted = mqb_flash_uds::prepare_block_for_flash(cal_bytes, flash_info.crypto);
-    println!("Prepared block 5 (CAL): {} bytes compressed+encrypted", cal_encrypted.len());
-    blocks.push(PreparedBlockData {
-        block_number: 5,
-        block_encrypted_bytes: cal_encrypted,
-        boxcode: file_box_code.to_owned(),
-        encryption_type: 0x0A,
-        compression_type: 0x0A,
-        should_erase: true,
-        uds_checksum: flash_info.block_checksum(5).unwrap_or([0; 4]),
-        block_name: "CAL".to_owned(),
-    });
+    let mut cal = mqb_flash_uds::prepare_block(flash_info, 5, cal_bytes);
+    cal.boxcode = file_box_code.to_owned();
+    println!(
+        "Prepared block 5 (CAL): {} bytes compressed+encrypted",
+        cal.block_encrypted_bytes.len()
+    );
+    blocks.push(cal);
 
     let (progress_tx, progress_handle) = spawn_progress_listener();
 
@@ -628,8 +686,12 @@ async fn cmd_unlock(firmware_path: &Path, module: &str, interface_str: &str) -> 
 
     let result = mqb_flash_uds::flash_blocks(flash_info, blocks, opts).await;
     match &result {
-        Ok(()) => { let _ = progress_tx.send(ProgressUpdate::Complete); }
-        Err(e) => { let _ = progress_tx.send(ProgressUpdate::Error(e.to_string())); }
+        Ok(()) => {
+            let _ = progress_tx.send(ProgressUpdate::Complete);
+        }
+        Err(e) => {
+            let _ = progress_tx.send(ProgressUpdate::Error(e.to_string()));
+        }
     }
     let _ = progress_handle.await;
     result.with_context(|| "Unlock flash failed")?;
@@ -641,7 +703,8 @@ async fn cmd_read_ecu(module: &str, interface_str: &str) -> Result<()> {
     let flash_info = get_flash_info(module)?;
     let interface: Interface = interface_str.parse().map_err(anyhow::Error::msg)?;
 
-    let data = mqb_flash_uds::read_ecu_data(flash_info, interface).await
+    let data = mqb_flash_uds::read_ecu_data(flash_info, interface)
+        .await
         .with_context(|| "Reading ECU data")?;
 
     for (key, value) in &data {

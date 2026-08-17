@@ -1,17 +1,25 @@
 //! Test reading CHARACTERISTIC values from real firmware + A2L data.
-use std::time::Instant;
-use mqb_a2l::reader::{AddressMap, CharacteristicValues, make_resolver, read_characteristic};
+use mqb_a2l::reader::{make_resolver, read_characteristic, AddressMap, CharacteristicValues};
 use mqb_a2l::CharacteristicType;
+use std::time::Instant;
 
 fn main() {
-    let a2l_path = std::env::args().nth(1).expect("Usage: read_chars <a2l_file> <bin_file>");
-    let bin_path = std::env::args().nth(2).expect("Usage: read_chars <a2l_file> <bin_file>");
+    let a2l_path = std::env::args()
+        .nth(1)
+        .expect("Usage: read_chars <a2l_file> <bin_file>");
+    let bin_path = std::env::args()
+        .nth(2)
+        .expect("Usage: read_chars <a2l_file> <bin_file>");
 
     eprintln!("Loading A2L...");
     let t0 = Instant::now();
     let a2l_bytes = std::fs::read(&a2l_path).expect("read A2L");
     let a2l = mqb_a2l::parse(&a2l_bytes).expect("parse A2L");
-    eprintln!("  {} characteristics in {:.2?}", a2l.characteristics.len(), t0.elapsed());
+    eprintln!(
+        "  {} characteristics in {:.2?}",
+        a2l.characteristics.len(),
+        t0.elapsed()
+    );
 
     eprintln!("Loading binary...");
     let binary = std::fs::read(&bin_path).expect("read binary");
@@ -31,9 +39,17 @@ fn main() {
     // Read some VALUE characteristics
     eprintln!("\n=== Sample VALUE characteristics ===");
     let mut value_count = 0;
-    for ch in a2l.characteristics.iter().filter(|c| c.char_type == CharacteristicType::Value) {
-        if value_count >= 10 { break; }
-        if let Some(CharacteristicValues::Scalar(v)) = read_characteristic(ch, &a2l, &binary, &resolve) {
+    for ch in a2l
+        .characteristics
+        .iter()
+        .filter(|c| c.char_type == CharacteristicType::Value)
+    {
+        if value_count >= 10 {
+            break;
+        }
+        if let Some(CharacteristicValues::Scalar(v)) =
+            read_characteristic(ch, &a2l, &binary, &resolve)
+        {
             let cm = a2l.compu_methods.get(&ch.compu_method_ref);
             let unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
             eprintln!("  {:40} = {:.6} {}", ch.name, v, unit);
@@ -44,16 +60,26 @@ fn main() {
     // Read some CURVE characteristics
     eprintln!("\n=== Sample CURVE characteristics ===");
     let mut curve_count = 0;
-    for ch in a2l.characteristics.iter().filter(|c| c.char_type == CharacteristicType::Curve) {
-        if curve_count >= 3 { break; }
-        if let Some(CharacteristicValues::Curve { x, y }) = read_characteristic(ch, &a2l, &binary, &resolve) {
+    for ch in a2l
+        .characteristics
+        .iter()
+        .filter(|c| c.char_type == CharacteristicType::Curve)
+    {
+        if curve_count >= 3 {
+            break;
+        }
+        if let Some(CharacteristicValues::Curve { x, y }) =
+            read_characteristic(ch, &a2l, &binary, &resolve)
+        {
             let cm = a2l.compu_methods.get(&ch.compu_method_ref);
             let unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
             eprintln!("  {} ({} points, unit={}):", ch.name, x.len(), unit);
             for (xi, yi) in x.iter().zip(y.iter()).take(6) {
                 eprintln!("    x={:.2}  y={:.6}", xi, yi);
             }
-            if x.len() > 6 { eprintln!("    ..."); }
+            if x.len() > 6 {
+                eprintln!("    ...");
+            }
             curve_count += 1;
         }
     }
@@ -61,16 +87,28 @@ fn main() {
     // Read some MAP characteristics
     eprintln!("\n=== Sample MAP characteristics ===");
     let mut map_count = 0;
-    for ch in a2l.characteristics.iter().filter(|c| c.char_type == CharacteristicType::Map) {
-        if map_count >= 2 { break; }
-        if let Some(CharacteristicValues::Map { x, y, z }) = read_characteristic(ch, &a2l, &binary, &resolve) {
+    for ch in a2l
+        .characteristics
+        .iter()
+        .filter(|c| c.char_type == CharacteristicType::Map)
+    {
+        if map_count >= 2 {
+            break;
+        }
+        if let Some(CharacteristicValues::Map { x, y, z }) =
+            read_characteristic(ch, &a2l, &binary, &resolve)
+        {
             let cm = a2l.compu_methods.get(&ch.compu_method_ref);
             let unit = cm.map(|c| c.unit.as_str()).unwrap_or("");
             eprintln!("  {} ({}x{}, unit={}):", ch.name, x.len(), y.len(), unit);
             // Print header
             eprint!("    {:>8}", "");
-            for xi in x.iter().take(6) { eprint!(" {:>8.2}", xi); }
-            if x.len() > 6 { eprint!("  ..."); }
+            for xi in x.iter().take(6) {
+                eprint!(" {:>8.2}", xi);
+            }
+            if x.len() > 6 {
+                eprint!("  ...");
+            }
             eprintln!();
             // Print rows
             for (yi_idx, yi) in y.iter().enumerate().take(6) {
@@ -78,10 +116,14 @@ fn main() {
                 for zv in z[yi_idx].iter().take(6) {
                     eprint!(" {:>8.4}", zv);
                 }
-                if x.len() > 6 { eprint!("  ..."); }
+                if x.len() > 6 {
+                    eprint!("  ...");
+                }
                 eprintln!();
             }
-            if y.len() > 6 { eprintln!("    ..."); }
+            if y.len() > 6 {
+                eprintln!("    ...");
+            }
             map_count += 1;
         }
     }
@@ -125,10 +167,18 @@ fn main() {
         ok += s;
     }
     eprintln!("  --------");
-    eprintln!("  TOTAL    {:>6} / {:<6}  ({:.1}%)", ok, total, 100.0 * ok as f64 / total as f64);
+    eprintln!(
+        "  TOTAL    {:>6} / {:<6}  ({:.1}%)",
+        ok,
+        total,
+        100.0 * ok as f64 / total as f64
+    );
 
     if !failed_examples.is_empty() {
-        eprintln!("\n=== Failed examples (first {}) ===", failed_examples.len());
+        eprintln!(
+            "\n=== Failed examples (first {}) ===",
+            failed_examples.len()
+        );
         for ex in &failed_examples {
             eprintln!("{ex}");
         }

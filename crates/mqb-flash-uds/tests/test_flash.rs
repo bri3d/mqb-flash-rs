@@ -29,6 +29,9 @@ fn synthetic_cal_block() -> PreparedBlockData {
         encryption_type: 0x0A,
         should_erase: true,
         uds_checksum: [0, 0, 0, 0],
+        // The fixture was captured against the real block length, not the
+        // 4093-byte synthetic payload.
+        announced_length: S1810_FLASH_INFO.block_length(5).unwrap() as u32,
     }
 }
 

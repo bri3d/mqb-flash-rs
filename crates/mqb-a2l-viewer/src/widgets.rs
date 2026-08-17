@@ -19,11 +19,15 @@ pub fn map_table<'a>(
     // X-axis header row
     let mut header = row![].spacing(0);
     header = header.push(
-        container(text("").size(11)).width(cell_w)
+        container(text("").size(11))
+            .width(cell_w)
             .style(|theme: &Theme| {
                 let (bg, _) = map_header_colors(theme);
-                container::Style { background: Some(bg.into()), ..Default::default() }
-            })
+                container::Style {
+                    background: Some(bg.into()),
+                    ..Default::default()
+                }
+            }),
     );
     for xi in x {
         let v = format_val(*xi);
@@ -102,15 +106,20 @@ pub fn map_table_with_axis_diff<'a>(
     // X-axis header row
     let mut header = row![].spacing(0);
     header = header.push(
-        container(text("").size(11)).width(cell_w)
+        container(text("").size(11))
+            .width(cell_w)
             .style(|theme: &Theme| {
                 let (bg, _) = map_header_colors(theme);
-                container::Style { background: Some(bg.into()), ..Default::default() }
-            })
+                container::Style {
+                    background: Some(bg.into()),
+                    ..Default::default()
+                }
+            }),
     );
     for (xi_idx, xi) in x.iter().enumerate() {
         let v = format_val(*xi);
-        let pct = x_old.get(xi_idx)
+        let pct = x_old
+            .get(xi_idx)
             .map(|old| pct_diff(*old, *xi))
             .unwrap_or(f64::INFINITY);
         let changed = pct.abs() > 0.001;
@@ -143,7 +152,8 @@ pub fn map_table_with_axis_diff<'a>(
     // Data rows
     for (yi_idx, yi) in y.iter().enumerate() {
         let mut data_row = row![].spacing(0);
-        let y_pct = y_old.get(yi_idx)
+        let y_pct = y_old
+            .get(yi_idx)
             .map(|old| pct_diff(*old, *yi))
             .unwrap_or(f64::INFINITY);
         let y_changed = y_pct.abs() > 0.001;
@@ -211,15 +221,20 @@ pub fn diff_map_table_with_axis_diff<'a>(
     // X-axis header row
     let mut header = row![].spacing(0);
     header = header.push(
-        container(text("").size(11)).width(cell_w)
+        container(text("").size(11))
+            .width(cell_w)
             .style(|theme: &Theme| {
                 let (bg, _) = map_header_colors(theme);
-                container::Style { background: Some(bg.into()), ..Default::default() }
-            })
+                container::Style {
+                    background: Some(bg.into()),
+                    ..Default::default()
+                }
+            }),
     );
     for (xi_idx, xi) in x.iter().enumerate() {
         let v = format_val(*xi);
-        let pct = x_old.get(xi_idx)
+        let pct = x_old
+            .get(xi_idx)
             .map(|old| pct_diff(*old, *xi))
             .unwrap_or(f64::INFINITY);
         let changed = pct.abs() > 0.001;
@@ -252,7 +267,8 @@ pub fn diff_map_table_with_axis_diff<'a>(
     // Data rows
     for (yi_idx, yi) in y.iter().enumerate() {
         let mut data_row = row![].spacing(0);
-        let y_pct = y_old.get(yi_idx)
+        let y_pct = y_old
+            .get(yi_idx)
             .map(|old| pct_diff(*old, *yi))
             .unwrap_or(f64::INFINITY);
         let y_changed = y_pct.abs() > 0.001;
@@ -285,10 +301,7 @@ pub fn diff_map_table_with_axis_diff<'a>(
 
         if let Some(row2_data) = row2 {
             for (xi_idx, val2) in row2_data.iter().enumerate() {
-                let val1 = row1
-                    .and_then(|r| r.get(xi_idx))
-                    .copied()
-                    .unwrap_or(0.0);
+                let val1 = row1.and_then(|r| r.get(xi_idx)).copied().unwrap_or(0.0);
                 let pct = pct_diff(val1, *val2);
                 let v = if show_percent {
                     format_pct(pct)
@@ -328,7 +341,11 @@ pub fn format_val(v: f64) -> String {
 /// Percentage difference: (new - old) / |old| * 100.
 pub fn pct_diff(old: f64, new: f64) -> f64 {
     if old.abs() < 1e-15 {
-        if (new - old).abs() < 1e-15 { 0.0 } else { f64::INFINITY }
+        if (new - old).abs() < 1e-15 {
+            0.0
+        } else {
+            f64::INFINITY
+        }
     } else {
         (new - old) / old.abs() * 100.0
     }
@@ -337,7 +354,11 @@ pub fn pct_diff(old: f64, new: f64) -> f64 {
 /// Format percentage for display.
 pub fn format_pct(pct: f64) -> String {
     if pct.is_infinite() {
-        if pct > 0.0 { "+∞%".to_string() } else { "-∞%".to_string() }
+        if pct > 0.0 {
+            "+∞%".to_string()
+        } else {
+            "-∞%".to_string()
+        }
     } else if pct.abs() < 0.001 {
         "0.0%".to_string()
     } else {

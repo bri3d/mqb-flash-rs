@@ -4,10 +4,10 @@
 //! each block according to the two-character `ENCRYPT-COMPRESS-METHOD` type code,
 //! and returns a map of block ID → decompressed data.
 
+use mqb_lzss::{decompress_legacy, decompress_lzss10};
+use mqb_modules::{BlockCrypto, FlashInfo};
 use std::collections::HashMap;
 use thiserror::Error;
-use mqb_modules::{BlockCrypto, FlashInfo};
-use mqb_lzss::{decompress_legacy, decompress_lzss10};
 
 #[derive(Debug, Error)]
 pub enum OdxError {
@@ -76,7 +76,6 @@ fn extract_odx_with(
     let mut all_data = HashMap::new();
 
     for node in flash_data_nodes {
-
         let data_id = node.attribute("ID").unwrap_or("").to_owned();
 
         let data_content = node
@@ -115,10 +114,16 @@ fn extract_odx_with(
             .ok_or_else(|| OdxError::MissingSize(data_id.clone()))?;
 
         // Decompress
+        // Order matters: the module-level LZSS10 override must be tested before
+        // the '1' arm. DQ250 is the only module that sets it, and a DSG ODX
+        // carrying ENCRYPT-COMPRESS-METHOD "11" would otherwise be fed to the
+        // Simos8 legacy decompressor — which either yields garbage blocks or
+        // panics on the length assertion. Python tests `is_dsg` first for the
+        // same reason (extractodx.py:114-119).
         let decompressed = match compression_type {
             'A' | 'a' => decompress_lzss10(&decrypted, decompressed_size),
-            '1' => decompress_legacy(&decrypted),
             _ if lzss10_odx => decompress_lzss10(&decrypted, decompressed_size),
+            '1' => decompress_legacy(&decrypted),
             _ => decrypted, // '0' = no compression
         };
 

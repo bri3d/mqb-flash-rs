@@ -1,21 +1,19 @@
 //! Per-ECU FlashInfo configurations.
 
-pub mod simos18;
-pub mod simos122;
-pub mod simos1810;
-pub mod simos184;
-pub mod simos16;
-pub mod simos10;
-pub mod simos8;
-pub mod simos12;
 pub mod dq250mqb;
 pub mod dq381;
 pub mod haldex4motion;
+pub mod simos10;
+pub mod simos12;
+pub mod simos122;
+pub mod simos16;
+pub mod simos18;
+pub mod simos1810;
+pub mod simos184;
+pub mod simos8;
 
 /// Shared Simos block identifiers (block_number → UDS identifier).
-pub const BLOCK_IDENTIFIERS_SIMOS: &[(u8, u8)] = &[
-    (1, 1), (2, 2), (3, 3), (4, 4), (5, 5),
-];
+pub const BLOCK_IDENTIFIERS_SIMOS: &[(u8, u8)] = &[(1, 1), (2, 2), (3, 3), (4, 4), (5, 5)];
 
 /// Simos UDS checksums (all zeros — internally checksummed).
 pub const BLOCK_CHECKSUMS_SIMOS: &[(u8, [u8; 4])] = &[
@@ -51,9 +49,8 @@ pub const BOX_CODE_LOCATION_SIMOS: &[(u8, (usize, usize))] = &[
 ];
 
 /// Standard Simos transfer sizes (maximum ISO-TP payload).
-pub const BLOCK_TRANSFER_SIZES_SIMOS: &[(u8, usize)] = &[
-    (1, 0xFFD), (2, 0xFFD), (3, 0xFFD), (4, 0xFFD), (5, 0xFFD),
-];
+pub const BLOCK_TRANSFER_SIZES_SIMOS: &[(u8, usize)] =
+    &[(1, 0xFFD), (2, 0xFFD), (3, 0xFFD), (4, 0xFFD), (5, 0xFFD)];
 
 /// Standard Simos checksum header locations.
 pub const CHECKSUM_BLOCK_LOCATION_SIMOS: &[(u8, usize)] = &[

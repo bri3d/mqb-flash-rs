@@ -1,48 +1,43 @@
 //! Simos8 ECU flash configuration.
 
-use crate::crypto::SimosXorCrypto;
-use crate::types::{ChecksumKind, FlashInfo, ECU_CONTROL_MODULE_IDENTIFIER};
 use super::{BLOCK_CHECKSUMS_SIMOS, BLOCK_IDENTIFIERS_SIMOS, BLOCK_TRANSFER_SIZES_SIMOS};
+use crate::crypto::SimosXorCrypto;
+use crate::types::{
+    BlockPrep, ChecksumKind, FlashInfo, UdsChecksumKind, ECU_CONTROL_MODULE_IDENTIFIER,
+};
 
 static S8_CRYPTO: SimosXorCrypto = SimosXorCrypto;
 
 const SA2_SCRIPT: &[u8] = &[
-    0x68, 0x05, 0x82, 0x4A, 0x10, 0x68, 0x04, 0x93, 0x30, 0x04, 0x19, 0x62, 0x4A, 0x05, 0x87,
-    0x15, 0x10, 0x19, 0x70, 0x82, 0x49, 0x93, 0x24, 0x04, 0x19, 0x66, 0x82, 0x4A, 0x05, 0x87,
-    0x02, 0x03, 0x19, 0x70, 0x82, 0x4A, 0x01, 0x81, 0x49, 0x4C,
+    0x68, 0x05, 0x82, 0x4A, 0x10, 0x68, 0x04, 0x93, 0x30, 0x04, 0x19, 0x62, 0x4A, 0x05, 0x87, 0x15,
+    0x10, 0x19, 0x70, 0x82, 0x49, 0x93, 0x24, 0x04, 0x19, 0x66, 0x82, 0x4A, 0x05, 0x87, 0x02, 0x03,
+    0x19, 0x70, 0x82, 0x4A, 0x01, 0x81, 0x49, 0x4C,
 ];
 
 const BASE_ADDRESSES: &[(u8, u32)] = &[
-    (1, 0x80020000), (2, 0x80080000), (3, 0xA0040000), (6, 0xA0040000),
+    (1, 0x80020000),
+    (2, 0x80080000),
+    (3, 0xA0040000),
+    (6, 0xA0040000),
 ];
 
-const BLOCK_LENGTHS: &[(u8, usize)] = &[
-    (1, 0x13E00), (2, 0x17FE00), (3, 0x3C000),
-];
+const BLOCK_LENGTHS: &[(u8, usize)] = &[(1, 0x13E00), (2, 0x17FE00), (3, 0x3C000)];
 
-const BLOCK_NAMES_FRF: &[(u8, &str)] = &[
-    (1, "FD_0"), (2, "FD_1"), (3, "FD_2"),
-];
+const BLOCK_NAMES_FRF: &[(u8, &str)] = &[(1, "FD_0"), (2, "FD_1"), (3, "FD_2")];
 
-const BINFILE_LAYOUT: &[(u8, usize)] = &[
-    (1, 0x020000), (2, 0x080000), (3, 0x040000),
-];
+const BINFILE_LAYOUT: &[(u8, usize)] = &[(1, 0x020000), (2, 0x080000), (3, 0x040000)];
 
-const SOFTWARE_VERSION_LOCATION: &[(u8, (usize, usize))] = &[
-    (1, (0x437, 0x43F)), (2, (0x627, 0x62F)), (3, (0x23, 0x2B)),
-];
+const SOFTWARE_VERSION_LOCATION: &[(u8, (usize, usize))] =
+    &[(1, (0x437, 0x43F)), (2, (0x627, 0x62F)), (3, (0x23, 0x2B))];
 
-const BOX_CODE_LOCATION: &[(u8, (usize, usize))] = &[
-    (1, (0x0, 0x0)), (2, (0x0, 0x0)), (3, (0x60, 0x6B)),
-];
+const BOX_CODE_LOCATION: &[(u8, (usize, usize))] =
+    &[(1, (0x0, 0x0)), (2, (0x0, 0x0)), (3, (0x60, 0x6B))];
 
-const CHECKSUM_BLOCK_LOCATION: &[(u8, usize)] = &[
-    (0, 0x300), (1, 0x300), (2, 0x300), (3, 0x300), (6, 0x340),
-];
+const CHECKSUM_BLOCK_LOCATION: &[(u8, usize)] =
+    &[(0, 0x300), (1, 0x300), (2, 0x300), (3, 0x300), (6, 0x340)];
 
-const BLOCK_NAME_TO_NUMBER: &[(&str, u8)] = &[
-    ("CBOOT", 1), ("ASW1", 2), ("CAL", 3), ("CBOOT_TEMP", 6),
-];
+const BLOCK_NAME_TO_NUMBER: &[(&str, u8)] =
+    &[("CBOOT", 1), ("ASW1", 2), ("CAL", 3), ("CBOOT_TEMP", 6)];
 
 pub static S8_FLASH_INFO: FlashInfo = FlashInfo {
     base_addresses: BASE_ADDRESSES,
@@ -65,4 +60,11 @@ pub static S8_FLASH_INFO: FlashInfo = FlashInfo {
     checksum_kind: ChecksumKind::Simos,
     lzss10_odx: false,
     dynamic_block_length_offsets: &[],
+    compression_type: 0x0A,
+    encryption_type: 0x0A,
+    block_prep: BlockPrep::LzssAesBlock,
+    no_erase_max_block: 0,
+    uds_checksum_kind: UdsChecksumKind::Static,
+    default_stmin_us: 400,
+    no_internal_checksum_blocks: &[],
 };

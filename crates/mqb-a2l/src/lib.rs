@@ -228,7 +228,11 @@ mod tests {
         assert_eq!(a2l.record_layouts.len(), 4);
 
         // Scalar VALUE
-        let scalar = a2l.characteristics.iter().find(|c| c.name == "scalar_val").unwrap();
+        let scalar = a2l
+            .characteristics
+            .iter()
+            .find(|c| c.name == "scalar_val")
+            .unwrap();
         assert_eq!(scalar.char_type, CharacteristicType::Value);
         assert_eq!(scalar.address, 0x200);
         assert_eq!(scalar.deposit, "VAL_U2");
@@ -237,14 +241,22 @@ mod tests {
         assert!(scalar.axes.is_empty());
 
         // CURVE with COM_AXIS
-        let curve = a2l.characteristics.iter().find(|c| c.name == "my_curve").unwrap();
+        let curve = a2l
+            .characteristics
+            .iter()
+            .find(|c| c.name == "my_curve")
+            .unwrap();
         assert_eq!(curve.char_type, CharacteristicType::Curve);
         assert_eq!(curve.axes.len(), 1);
         assert_eq!(curve.axes[0].attribute, AxisAttribute::ComAxis);
         assert_eq!(curve.axes[0].axis_pts_ref.as_deref(), Some("shared_axis"));
 
         // CURVE with STD_AXIS
-        let std_cur = a2l.characteristics.iter().find(|c| c.name == "std_curve").unwrap();
+        let std_cur = a2l
+            .characteristics
+            .iter()
+            .find(|c| c.name == "std_curve")
+            .unwrap();
         assert_eq!(std_cur.axes[0].attribute, AxisAttribute::StdAxis);
 
         // AXIS_PTS
@@ -260,7 +272,11 @@ mod tests {
         assert_eq!(rl.fnc_values.as_ref().unwrap().position, 3);
 
         // VAL_BLK with FIX_AXIS
-        let blk = a2l.characteristics.iter().find(|c| c.name == "fix_blk").unwrap();
+        let blk = a2l
+            .characteristics
+            .iter()
+            .find(|c| c.name == "fix_blk")
+            .unwrap();
         assert_eq!(blk.char_type, CharacteristicType::ValBlk);
         assert_eq!(blk.axes[0].attribute, AxisAttribute::FixAxis);
         let dist = blk.axes[0].fix_axis_par_dist.as_ref().unwrap();
@@ -315,7 +331,11 @@ mod tests {
         binary[0x504..0x506].copy_from_slice(&3000u16.to_le_bytes());
 
         // Test scalar
-        let ch = a2l.characteristics.iter().find(|c| c.name == "scalar_val").unwrap();
+        let ch = a2l
+            .characteristics
+            .iter()
+            .find(|c| c.name == "scalar_val")
+            .unwrap();
         let val = read_characteristic(ch, &a2l, &binary, &resolve).unwrap();
         match val {
             CharacteristicValues::Scalar(v) => {
@@ -326,7 +346,11 @@ mod tests {
         }
 
         // Test COM_AXIS curve
-        let ch = a2l.characteristics.iter().find(|c| c.name == "my_curve").unwrap();
+        let ch = a2l
+            .characteristics
+            .iter()
+            .find(|c| c.name == "my_curve")
+            .unwrap();
         let val = read_characteristic(ch, &a2l, &binary, &resolve).unwrap();
         match val {
             CharacteristicValues::Curve { x, y } => {
@@ -342,7 +366,11 @@ mod tests {
         }
 
         // Test STD_AXIS curve
-        let ch = a2l.characteristics.iter().find(|c| c.name == "std_curve").unwrap();
+        let ch = a2l
+            .characteristics
+            .iter()
+            .find(|c| c.name == "std_curve")
+            .unwrap();
         let val = read_characteristic(ch, &a2l, &binary, &resolve).unwrap();
         match val {
             CharacteristicValues::Curve { x, y } => {
@@ -357,7 +385,11 @@ mod tests {
         }
 
         // Test FIX_AXIS VAL_BLK
-        let ch = a2l.characteristics.iter().find(|c| c.name == "fix_blk").unwrap();
+        let ch = a2l
+            .characteristics
+            .iter()
+            .find(|c| c.name == "fix_blk")
+            .unwrap();
         let val = read_characteristic(ch, &a2l, &binary, &resolve).unwrap();
         match val {
             CharacteristicValues::ValBlk(v) => {

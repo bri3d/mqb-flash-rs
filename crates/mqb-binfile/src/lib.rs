@@ -1,11 +1,11 @@
 //! Binary file splitting and combining for VW ECU flash images.
 
+use anyhow::{bail, Context, Result};
+use mqb_modules::{BlockData, FlashInfo};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use anyhow::{bail, Context, Result};
 use thiserror::Error;
-use mqb_modules::{BlockData, FlashInfo};
 
 #[derive(Debug, Error)]
 pub enum BinfileError {
@@ -14,7 +14,10 @@ pub enum BinfileError {
 }
 
 /// Read a full binary image from a file and split it into blocks.
-pub fn blocks_from_file(path: &Path, flash_info: &FlashInfo) -> Result<HashMap<String, BlockData>, BinfileError> {
+pub fn blocks_from_file(
+    path: &Path,
+    flash_info: &FlashInfo,
+) -> Result<HashMap<String, BlockData>, BinfileError> {
     let data = fs::read(path)?;
     Ok(blocks_from_bytes(&data, flash_info))
 }
@@ -24,8 +27,12 @@ pub fn blocks_from_bytes(data: &[u8], flash_info: &FlashInfo) -> HashMap<String,
     let mut blocks = HashMap::new();
 
     for &(block_num, frf_name) in flash_info.block_names_frf {
-        let Some(offset) = flash_info.binfile_offset(block_num) else { continue };
-        let Some(length) = flash_info.resolve_block_length(block_num, data) else { continue };
+        let Some(offset) = flash_info.binfile_offset(block_num) else {
+            continue;
+        };
+        let Some(length) = flash_info.resolve_block_length(block_num, data) else {
+            continue;
+        };
 
         if offset + length > data.len() {
             continue;
@@ -33,7 +40,9 @@ pub fn blocks_from_bytes(data: &[u8], flash_info: &FlashInfo) -> HashMap<String,
 
         // Prefer the logical name (e.g. "ASW1") over the FRF name ("FD_02DATA") so that
         // split-bin output can be fed directly into checksum/prepare without renaming.
-        let name = flash_info.block_number_to_name(block_num).unwrap_or(frf_name);
+        let name = flash_info
+            .block_number_to_name(block_num)
+            .unwrap_or(frf_name);
         let block_bytes = data[offset..offset + length].to_vec();
         blocks.insert(
             name.to_owned(),
@@ -50,9 +59,14 @@ pub fn bin_from_blocks(blocks: &HashMap<String, BlockData>, flash_info: &FlashIn
 
     for block in blocks.values() {
         let block_num = block.block_number;
-        let Some(offset) = flash_info.binfile_offset(block_num) else { continue };
+        let Some(offset) = flash_info.binfile_offset(block_num) else {
+            continue;
+        };
 
-        let copy_len = block.block_bytes.len().min(output.len().saturating_sub(offset));
+        let copy_len = block
+            .block_bytes
+            .len()
+            .min(output.len().saturating_sub(offset));
         output[offset..offset + copy_len].copy_from_slice(&block.block_bytes[..copy_len]);
     }
 
@@ -69,10 +83,7 @@ pub fn bin_from_blocks(blocks: &HashMap<String, BlockData>, flash_info: &FlashIn
 /// - `.bin` — split assembled binary by block layout from `flash_info`
 ///
 /// Returns a map of block number → raw bytes.
-pub fn load_raw_blocks(
-    path: &Path,
-    flash_info: &FlashInfo,
-) -> Result<HashMap<u8, Vec<u8>>> {
+pub fn load_raw_blocks(path: &Path, flash_info: &FlashInfo) -> Result<HashMap<u8, Vec<u8>>> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -88,37 +99,28 @@ pub fn load_raw_blocks(
     }
 }
 
-fn load_raw_blocks_frf(
-    path: &Path,
-    flash_info: &FlashInfo,
-) -> Result<HashMap<u8, Vec<u8>>> {
-    let data = fs::read(path)
-        .with_context(|| format!("Reading FRF: {}", path.display()))?;
-    let frf_contents = mqb_frf::extract_frf(&data)
-        .with_context(|| "Extracting FRF ZIP")?;
+fn load_raw_blocks_frf(path: &Path, flash_info: &FlashInfo) -> Result<HashMap<u8, Vec<u8>>> {
+    let data = fs::read(path).with_context(|| format!("Reading FRF: {}", path.display()))?;
+    let frf_contents = mqb_frf::extract_frf(&data).with_context(|| "Extracting FRF ZIP")?;
 
     let (_, odx_bytes) = frf_contents
         .iter()
         .find(|(k, _)| k.to_ascii_lowercase().ends_with(".odx"))
         .with_context(|| "FRF does not contain an ODX file (SGO format not yet supported)")?;
 
-    let xml = std::str::from_utf8(odx_bytes)
-        .with_context(|| "ODX entry is not valid UTF-8")?;
+    let xml = std::str::from_utf8(odx_bytes).with_context(|| "ODX entry is not valid UTF-8")?;
     map_odx_blocks(xml, flash_info)
 }
 
-fn load_raw_blocks_odx(
-    path: &Path,
-    flash_info: &FlashInfo,
-) -> Result<HashMap<u8, Vec<u8>>> {
-    let xml = fs::read_to_string(path)
-        .with_context(|| format!("Reading ODX: {}", path.display()))?;
+fn load_raw_blocks_odx(path: &Path, flash_info: &FlashInfo) -> Result<HashMap<u8, Vec<u8>>> {
+    let xml =
+        fs::read_to_string(path).with_context(|| format!("Reading ODX: {}", path.display()))?;
     map_odx_blocks(&xml, flash_info)
 }
 
 fn map_odx_blocks(xml: &str, flash_info: &FlashInfo) -> Result<HashMap<u8, Vec<u8>>> {
-    let (odx_blocks, _boxcodes) = mqb_odx::extract_odx(xml, flash_info)
-        .with_context(|| "Parsing ODX")?;
+    let (odx_blocks, _boxcodes) =
+        mqb_odx::extract_odx(xml, flash_info).with_context(|| "Parsing ODX")?;
     anyhow::ensure!(!odx_blocks.is_empty(), "ODX contains no flash blocks");
 
     let mut result = HashMap::new();
@@ -133,7 +135,10 @@ fn map_odx_blocks(xml: &str, flash_info: &FlashInfo) -> Result<HashMap<u8, Vec<u
 fn load_raw_blocks_bin(path: &Path, flash_info: &FlashInfo) -> Result<HashMap<u8, Vec<u8>>> {
     let blocks = blocks_from_file(path, flash_info)
         .with_context(|| format!("Reading BIN: {}", path.display()))?;
-    Ok(blocks.into_values().map(|bd| (bd.block_number, bd.block_bytes)).collect())
+    Ok(blocks
+        .into_values()
+        .map(|bd| (bd.block_number, bd.block_bytes))
+        .collect())
 }
 
 // ── Block filtering ───────────────────────────────────────────────────────────
