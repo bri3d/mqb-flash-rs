@@ -6,14 +6,15 @@ It is currently a work in progress:
 
 * Simos18 re-flashing is tested
 * Simos18 unlocking is somewhat tested
-* Other control modules (Haldex, DSG) are UNTESTED and probably WILL NOT work.
+* Other control modules (Haldex, DSG) are UNTESTED.
 
 It also introduces several new tools: 
 
 * mqb-a2l-viewer : this is a diffing tool which will diff two binaries provided an A2L. its main differentiator, besides being very fast, is that it will show and analyze issues with shared axes. This is intended as a compliment to Tuner Pro.
 * mqb-logger-gui : this is not yet a full-fledged logger, but rather an editor for SimosTools CSV files given an A2L. We had some small tools for this before (a2l2csv etc), but this is a real application with a nice UI. It's also, again, very fast.
+* mqb-immo-gui: this is a GUI for performing Immobilizer operations
 
-There are useful crates in here for SA2 (should be complete), FRF (it's simple so this should work on all of them), A2L (outrageously incomplete to the spec but should work for characteristics and measurements across most common ECUs), and ODX (VERY VERY incomplete, really only good for Simos18).
+There are useful crates in here for SA2 (should be complete), FRF (it's simple so this should work on all of them), A2L (outrageously incomplete to the spec but should work for characteristics and measurements across most common ECUs), Simos18 NVRAM encryption, Immo 5, and ODX (VERY VERY incomplete, really only good for Simos18).
 
 ## AI Use
 
