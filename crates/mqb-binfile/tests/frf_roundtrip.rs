@@ -2,7 +2,10 @@
 //! correct Simos and ECM3 checksums; also tests that cboot-patched binaries
 //! retain valid checksums after a checksum fix.
 //!
-//! Requires real firmware files under ../../../frf/
+//! The FRF files are manufacturer firmware and are not redistributable, so
+//! they are not in this repository; they are read from `../../../frf/`. Each
+//! case skips when its file is absent, so a clean checkout (CI included)
+//! still passes.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -64,6 +67,18 @@ const FRF_HALDEX_E: &str = concat!(
 const FRF_S18: &str = FRF_S18_H1;
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// Return `path` only if the firmware file is actually there, logging a skip
+/// notice when it is not. Manufacturer firmware cannot ship with the repo, so
+/// an absent file is an expected condition, not a failure.
+fn firmware(path: &'static str) -> Option<&'static str> {
+    if Path::new(path).exists() {
+        Some(path)
+    } else {
+        eprintln!("SKIPPED: firmware not present at {path}");
+        None
+    }
+}
 
 fn extract_frf_to_bin(frf_path: &str, flash_info: &'static FlashInfo) -> Vec<u8> {
     let raw = mqb_binfile::load_raw_blocks(Path::new(frf_path), flash_info)
@@ -178,7 +193,7 @@ fn apply_cboot_patch_and_fix(bin: &mut [u8], flash_info: &'static FlashInfo) {
 
 #[test]
 fn all_frf_files_checksums_valid() {
-    let cases: &[(&str, &FlashInfo)] = &[
+    let cases: &[(&'static str, &'static FlashInfo)] = &[
         (FRF_S1810, &S1810_FLASH_INFO),
         (FRF_S18_H1, &S18_FLASH_INFO),
         (FRF_S18_H2, &S18_FLASH_INFO),
@@ -189,27 +204,48 @@ fn all_frf_files_checksums_valid() {
         (FRF_S18_K3, &S18_FLASH_INFO),
         (FRF_S18_06K, &S18_FLASH_INFO),
     ];
+
+    // Checked per file rather than all-or-nothing: a working tree that holds
+    // some of the firmware still gets those files validated.
+    let mut checked = 0;
     for &(path, info) in cases {
-        assert_all_valid(path, info);
+        if let Some(path) = firmware(path) {
+            assert_all_valid(path, info);
+            checked += 1;
+        }
     }
 
     // Haldex FRFs (different checksum algorithm)
-    assert_haldex_valid(FRF_HALDEX_C, &HALDEX_FLASH_INFO);
-    assert_haldex_valid(FRF_HALDEX_E, &HALDEX_FLASH_INFO);
+    for path in [FRF_HALDEX_C, FRF_HALDEX_E] {
+        if let Some(path) = firmware(path) {
+            assert_haldex_valid(path, &HALDEX_FLASH_INFO);
+            checked += 1;
+        }
+    }
+
+    if checked == 0 {
+        eprintln!("SKIPPED: no firmware present, nothing was checked");
+    }
 }
 
 // ── CBOOT patch: verify checksums survive patch + fix ─────────────────────────
 
 #[test]
 fn s1810_patched_cboot_bin_has_valid_checksums_after_fix() {
-    let mut bin = extract_frf_to_bin(FRF_S1810, &S1810_FLASH_INFO);
+    let Some(path) = firmware(FRF_S1810) else {
+        return;
+    };
+    let mut bin = extract_frf_to_bin(path, &S1810_FLASH_INFO);
     apply_cboot_patch_and_fix(&mut bin, &S1810_FLASH_INFO);
     assert_all_checksums_valid(&bin, &S1810_FLASH_INFO);
 }
 
 #[test]
 fn s18_patched_cboot_bin_has_valid_checksums_after_fix() {
-    let mut bin = extract_frf_to_bin(FRF_S18, &S18_FLASH_INFO);
+    let Some(path) = firmware(FRF_S18) else {
+        return;
+    };
+    let mut bin = extract_frf_to_bin(path, &S18_FLASH_INFO);
     apply_cboot_patch_and_fix(&mut bin, &S18_FLASH_INFO);
     assert_all_checksums_valid(&bin, &S18_FLASH_INFO);
 }

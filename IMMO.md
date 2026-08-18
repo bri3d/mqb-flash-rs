@@ -2,7 +2,7 @@
 
 VW Immobilizer 5 / WFS 5 is a very simple system which allows modules to attest that they share the same secret key material (CS) and master key (MK). It protects against replay attacks and against unauthenticated attackers with CANbus access gaining the ability to start or drive a vehicle without knowledge of the secret key material.
 
-In this repository, we provide an emulator for the Immobilizer 5 Master (Instrument Cluster) which can release sub-modules (ie - ECU) provided the key material. Note that this does NOT enable car theft or break the security boundary of the immobilizer in any way as the secret key material still must be extracted; it's just a convenient way to work on the bench without needing a full immobilizer participant system.
+In this repository, we provide an emulator for the Immobilizer 5 Master (Instrument Cluster) which can release sub-modules (ie - ECU) provided the module's shared key material. Note that this does NOT enable car theft or break the security boundary of the immobilizer in any way as the secret key material still must be extracted; it's just a convenient way to work on the bench without needing a full immobilizer participant system.
 
 The secret key material is always read protected on all control modules where it is present. On Simos18, it lives in DFlash records, which are stored using an EEPROM emulation system and encrypted with a slightly warped variant of Hitag2, keyed using the Tricore MCUID. The Hitag2 variant is even more cryptographically weak than normal Hitag2, but it doesn't matter, because anyone in a position to read DFlash can also simply read the MCUID anyway and produce the key and IV.
 

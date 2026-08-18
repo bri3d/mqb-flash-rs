@@ -11,8 +11,13 @@
 *.a2l
 *.flashable_block*
 
-# Allow embedded data files needed for compilation
-!data/*.bin
+# Allow the embedded data files needed for compilation, by name. An explicit
+# allow-list rather than `!data/*.bin`, so a firmware image dropped into data/
+# stays ignored instead of becoming trackable.
+!data/mqb_dsg_key.bin
+!data/patch.bin
+!data/patch_1810.bin
+!data/patch_1841.bin
 
 # Session logs / debug logs
 *.log
