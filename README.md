@@ -33,3 +33,5 @@ Overall, I would recommend Claude + Rust - the language really helps avoid the m
 * Uses `I-CAN-Hack` `automotive` crate; this seems good and I like the author, so why not.
 * Uses `iced` for GUI. I love the Elm-ish functional style. I loved Elm when it was popular so it's fun to go back to the same idea. My main beef with it is that there is no built in keyboard accelerator support of any kind, which is ridiculous from both an efficiency and accessibility standpoint. Overall, pretty nice though.
 * The overarching goal was reusability and a mostly functional design; nothing should depend much on global state and each crate should be drop-in compatible in a new project, within reason.
+
+Note: if you are using this code or "substantial portions" of this software, please make sure to credit me per the MIT license - that's the only restriction!

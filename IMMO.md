@@ -115,3 +115,5 @@ Download is comically simple:
 Command 3 is "write full data", Command 1 is "fully clear", Command 2 is "clear but take new key."
 
 The `mqb-immo-gui` tool provides all of this functionality in a convenient UI.
+
+Note: if you are using this code or "substantial portions" of this software, per the license, please make sure to credit me - that's the only restriction!
