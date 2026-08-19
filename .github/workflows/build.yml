@@ -25,7 +25,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
           persist-credentials: false
@@ -57,7 +57,9 @@ jobs:
       # j2534 is Windows-only in practice; same reasoning.
       - name: Check j2534 feature (Windows)
         if: runner.os == 'Windows'
-        run: cargo check -p mqb-flash-uds --features j2534 --all-targets
+        run: |
+          cargo check -p mqb-flash-uds --features j2534 --all-targets
+          cargo check -p mqb-immo-gui --features j2534 --all-targets
 
   build:
     needs: check
@@ -71,12 +73,12 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             suffix: windows-x64
-            features: "--features mqb-flash-cli/j2534,mqb-flash-gui/j2534"
+            features: "--features mqb-flash-cli/j2534,mqb-flash-gui/j2534,mqb-immo-gui/j2534"
             ext: .exe
           - os: windows-latest
             target: i686-pc-windows-msvc
             suffix: windows-x86
-            features: "--features mqb-flash-cli/j2534,mqb-flash-gui/j2534"
+            features: "--features mqb-flash-cli/j2534,mqb-flash-gui/j2534,mqb-immo-gui/j2534"
             ext: .exe
           # Linux
           - os: ubuntu-latest
@@ -104,7 +106,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
           persist-credentials: false
@@ -134,14 +136,14 @@ jobs:
         run: |
           mkdir -p dist
           BIN_DIR="target/${{ matrix.target }}/release"
-          for bin in mqb-flash mqb-flash-gui mqb-a2l-viewer mqb-logger-gui; do
+          for bin in mqb-flash mqb-flash-gui mqb-immo mqb-a2l-viewer mqb-logger-gui; do
             if [ -f "$BIN_DIR/${bin}${{ matrix.ext }}" ]; then
               cp "$BIN_DIR/${bin}${{ matrix.ext }}" "dist/${bin}-${{ matrix.suffix }}${{ matrix.ext }}"
             fi
           done
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binaries-${{ matrix.suffix }}
           path: dist/*
@@ -154,7 +156,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
           merge-multiple: true
