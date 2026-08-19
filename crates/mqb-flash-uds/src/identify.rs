@@ -24,6 +24,7 @@
 //! the wizard opens each channel itself using
 //! [`crate::flash::make_isotp_config`] with [`IdentChannel::probe_flash_info`].
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use automotive::TransportLayer;
@@ -456,7 +457,7 @@ fn simos_candidates(strings: &IdentStrings) -> Vec<Candidate> {
         }
     }
     // Stable sort keeps the declaration order within one confidence level.
-    out.sort_by(|a, b| b.confidence.cmp(&a.confidence));
+    out.sort_by_key(|c| Reverse(c.confidence));
     out
 }
 
