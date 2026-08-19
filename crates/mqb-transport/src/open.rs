@@ -113,7 +113,7 @@ fn open_panda() -> Result<AsyncCanAdapter, OpenError> {
 
 #[cfg(all(target_os = "linux", feature = "socketcan"))]
 fn open_socketcan(name: &str) -> Result<AsyncCanAdapter, OpenError> {
-    let sc = automotive::socketcan::SocketCanAdapter::open(name)
+    let sc = automotive::socketcan::SocketCan::new(name)
         .map_err(|e| OpenError::Interface(format!("SocketCAN open error: {e}")))?;
     Ok(AsyncCanAdapter::new(sc))
 }
