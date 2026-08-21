@@ -498,8 +498,18 @@ async fn run_flash_sequence<T: TransportLayer>(
     uds.routine_control(RoutineControlType::Start, 0xFF01, None)
         .await?;
 
+    // The flash itself is written and verified at this point. Everything below is
+    // teardown: a keep-alive and a hard reset. An ECU that has already started
+    // rebooting — or that has dropped out of the programming session on its own —
+    // can answer these with a timeout or an NRC (`ServiceNotSupported` is the
+    // common one), and reporting that as a failed flash sends the user chasing a
+    // problem that does not exist. Log and continue instead; a genuine write or
+    // verify failure has already returned `Err` above.
+
     // 13. TesterPresent
-    uds.tester_present().await?;
+    if let Err(e) = uds.tester_present().await {
+        tracing::warn!("TesterPresent after verification failed ({e}) — flash already verified");
+    }
 
     // 14. Wait for the ECU to finish internal verification (e.g. patched periodic
     //     tasks) before issuing the hard reset.
@@ -515,7 +525,12 @@ async fn run_flash_sequence<T: TransportLayer>(
         Err(automotive::Error::Timeout) => {
             tracing::debug!("ECUReset: no response received (expected — ECU is rebooting)");
         }
-        Err(e) => return Err(FlashError::from(e)),
+        Err(e) => {
+            tracing::warn!(
+                "ECUReset was not acknowledged ({e}) — the flash is complete and verified; \
+                 cycle the ignition if the ECU does not restart on its own"
+            );
+        }
     }
 
     tracing::info!("Flash sequence complete");

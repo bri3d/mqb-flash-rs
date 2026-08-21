@@ -647,12 +647,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         // them apart is what distinguishes an unlock file.
                         state.unlock_file = Some(path);
                         state.firmware = Some(info);
-                        // A full flash chosen earlier (by going back) is no
-                        // longer on offer — see `State::full_flash_allowed`.
-                        if state.operation == Some(Operation::FullFlash) {
-                            state.operation = None;
-                            state.prepared = None;
-                        }
+                        // Choosing an unlock file *is* choosing the unlock:
+                        // there is nothing else this file can be used for here,
+                        // so the operation is settled and the wizard goes
+                        // straight on to the preflight. Offering to flash it as
+                        // a calibration, or to relock with it, would only invite
+                        // a mistake.
+                        state.operation = Some(Operation::Unlock);
+                        state.prepared = None;
                     }
                     Err(e) => {
                         state.unlock_file = None;
@@ -781,19 +783,20 @@ fn advance(state: &mut State) -> Task<Message> {
             }
         }
         Step::Unlock => {
-            state.step = Step::Operation;
-            Task::none()
-        }
-        Step::Operation => {
-            // The unlock file was already chosen and validated on the unlock
-            // screen, so an unlock skips straight to the preflight.
-            if state.operation == Some(Operation::Unlock) && state.firmware.is_some() {
+            // A file chosen here is the unlock file and the operation is already
+            // settled, so skip the operation screen entirely — the only choices
+            // it could offer for this file are wrong ones.
+            if state.unlock_file.is_some() && state.firmware.is_some() {
                 state.step = Step::Preflight;
                 start_preflight(state)
             } else {
-                state.step = Step::Firmware;
+                state.step = Step::Operation;
                 Task::none()
             }
+        }
+        Step::Operation => {
+            state.step = Step::Firmware;
+            Task::none()
         }
         Step::Firmware => {
             state.step = Step::Preflight;
@@ -823,7 +826,7 @@ fn previous_step(state: &State) -> Step {
         Step::Firmware => Step::Operation,
         Step::Preflight => {
             if state.operation == Some(Operation::Unlock) {
-                Step::Operation
+                Step::Unlock
             } else {
                 Step::Firmware
             }
@@ -1602,7 +1605,7 @@ fn unlock_file_picker(state: &State) -> Element<'_, Message> {
     } else if state.unlock_file.is_some() {
         col = col.push(
             row![
-                text("File accepted — choose Unlock on the next screen.").size(13),
+                text("File accepted — continuing will unlock this ECU.").size(13),
                 button("Clear")
                     .on_press(Message::ClearUnlockFile)
                     .padding([4, 10]),
@@ -1612,8 +1615,8 @@ fn unlock_file_picker(state: &State) -> Element<'_, Message> {
         );
         col = col.push(
             text(
-                "Clearing the file gives up on the unlock and puts the full flash back on \
-                 the next screen.",
+                "Clearing the file gives up on the unlock and returns to the list of flash \
+                 operations.",
             )
             .size(12),
         );
@@ -1625,12 +1628,9 @@ fn unlock_file_picker(state: &State) -> Element<'_, Message> {
 fn view_operation(state: &State) -> Element<'_, Message> {
     let mut col = column![].spacing(10);
 
-    // Offer the unlock whenever the ECU is not known to be unlocked — an
-    // unreadable state must not remove the option.
-    let locked = matches!(
-        state.unlock.as_ref().map(|u| &u.state),
-        Some(UnlockState::Locked) | Some(UnlockState::Unknown(_))
-    );
+    // The unlock is chosen by picking a file on the unlock screen, which then
+    // goes straight to the preflight — this screen is only ever reached when no
+    // unlock file is pending, so it offers no unlock option of its own.
     let definitely_locked = matches!(
         state.unlock.as_ref().map(|u| &u.state),
         Some(UnlockState::Locked)
@@ -1638,25 +1638,6 @@ fn view_operation(state: &State) -> Element<'_, Message> {
     let has_cboot = state
         .flash_info()
         .is_some_and(|fi| fi.block_to_number("CBOOT").is_some());
-
-    if locked && state.unlock_file.is_some() {
-        col = col.push(
-            radio(
-                "Unlock this ECU",
-                Operation::Unlock,
-                state.operation,
-                Message::OperationChosen,
-            )
-            .size(15),
-        );
-        col = col.push(
-            container(
-                text("Writes the unlock patch. Do this before flashing modified software.")
-                    .size(12),
-            )
-            .padding(iced::Padding::new(0.0).bottom(6).left(26)),
-        );
-    }
 
     col = col.push(
         radio(
@@ -1702,13 +1683,6 @@ fn view_operation(state: &State) -> Element<'_, Message> {
             )
             .padding(iced::Padding::new(0.0).bottom(6).left(26)),
         );
-    } else {
-        col = col.push(callout(
-            "Full flash is not available here",
-            "You chose an unlock file on the previous screen, so the operation to run now is \
-             the unlock. Unlock the ECU first, then start the wizard again to full flash it. \
-             To full flash instead, go back and clear the unlock file.",
-        ));
     }
 
     // Relocking only means anything on a module whose bootloader we would
