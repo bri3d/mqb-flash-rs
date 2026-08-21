@@ -29,7 +29,7 @@
 use std::collections::HashMap;
 
 use automotive::can::AsyncCanAdapter;
-use automotive::isotp::IsoTPAdapter;
+use automotive::isotp::{IsoTPAdapter, IsoTPConfig};
 
 use mqb_modules::{FlashInfo, PreparedBlockData};
 use mqb_transport::{open_can_adapter, Interface};
@@ -37,9 +37,9 @@ use mqb_transport::{open_can_adapter, Interface};
 use crate::identify::{ChannelIdentification, IDENT_CHANNELS};
 
 use crate::flash::{
-    make_isotp_config, read_dids, read_ecu_with_transport, run_probe, run_with_transport,
-    send_obd_dtc_clear_via_adapter, send_progress, write_did, FlashError, FlashOptions, ProbeKind,
-    ProbeOutcome, ProgressUpdate,
+    make_isotp_config_with_timeout, read_dids, read_ecu_with_transport, run_probe,
+    run_with_transport, send_obd_dtc_clear_via_adapter, send_progress, write_did, FlashError,
+    FlashOptions, ProbeKind, ProbeOutcome, ProgressUpdate, FLASH_TIMEOUT, IDENT_TIMEOUT,
 };
 
 // The hardware ISO 15765 path needs its own OBD-II channel; the raw-CAN path
@@ -48,8 +48,6 @@ use crate::flash::{
 use crate::flash::send_obd_dtc_clear;
 #[cfg(feature = "j2534")]
 use automotive::can::Identifier;
-#[cfg(feature = "j2534")]
-use automotive::isotp::IsoTPConfig;
 
 /// The OBD-II tester address used for the emission DTC clear.
 #[cfg(feature = "j2534")]
@@ -70,6 +68,12 @@ pub struct Session {
     inner: Option<Inner>,
     /// The diagnostic ID pair this session was opened for.
     channel: (u32, u32),
+    /// How long to wait for a response to a single request.
+    ///
+    /// Held on the session rather than chosen per operation because the
+    /// hardware ISO 15765 path bakes it into the channel at open — see
+    /// [`Session::open_for_identify`].
+    timeout: std::time::Duration,
 }
 
 enum Inner {
@@ -122,6 +126,31 @@ impl Session {
         flash_info: &FlashInfo,
         stmin_override: Option<u32>,
     ) -> Result<Self, FlashError> {
+        Self::open_with(interface, flash_info, stmin_override, FLASH_TIMEOUT)
+    }
+
+    /// Open a connection for identifying what is on a channel.
+    ///
+    /// Same as [`Session::open`] but with [`IDENT_TIMEOUT`] instead of
+    /// [`FLASH_TIMEOUT`], because a scan asks addresses that may have nothing
+    /// behind them and must not spend half a minute finding that out.
+    ///
+    /// **Read-only probing only.** On the hardware ISO 15765 path the timeout
+    /// is fixed when the channel opens and cannot be raised again afterwards,
+    /// so a session opened this way must not be used to flash.
+    pub fn open_for_identify(
+        interface: &Interface,
+        flash_info: &FlashInfo,
+    ) -> Result<Self, FlashError> {
+        Self::open_with(interface, flash_info, None, IDENT_TIMEOUT)
+    }
+
+    fn open_with(
+        interface: &Interface,
+        flash_info: &FlashInfo,
+        stmin_override: Option<u32>,
+        timeout: std::time::Duration,
+    ) -> Result<Self, FlashError> {
         tracing::info!(interface = %interface, project = flash_info.project_name, "Opening session");
 
         // Only the hardware ISO 15765 path consumes this: there the channel's
@@ -137,7 +166,7 @@ impl Session {
                 bitrate,
                 native_isotp: true,
             } => {
-                let mut config = make_isotp_config(flash_info);
+                let mut config = make_isotp_config_with_timeout(flash_info, timeout);
                 let stmin_us = stmin_override.unwrap_or(flash_info.default_stmin_us);
                 config.separation_time_min =
                     Some(std::time::Duration::from_micros(stmin_us as u64));
@@ -168,12 +197,22 @@ impl Session {
             interface: interface.clone(),
             inner: Some(inner),
             channel: channel_ids(flash_info),
+            timeout,
         })
     }
 
     /// The interface this session was opened on.
     pub fn interface(&self) -> &Interface {
         &self.interface
+    }
+
+    /// ISO-TP configuration for an operation on this session.
+    ///
+    /// Only consulted on the raw-CAN path, where the ISO-TP layer is rebuilt
+    /// per operation; the hardware ISO 15765 channel already carries the
+    /// timeout it was opened with.
+    fn config(&self, flash_info: &FlashInfo) -> IsoTPConfig {
+        make_isotp_config_with_timeout(flash_info, self.timeout)
     }
 
     /// Whether this session can talk to `flash_info`'s diagnostic channel.
@@ -236,7 +275,7 @@ impl Session {
         what: ProbeKind,
     ) -> Result<ProbeOutcome, FlashError> {
         self.require_channel(flash_info)?;
-        let config = make_isotp_config(flash_info);
+        let config = self.config(flash_info);
         with_transport!(self, config, |t| run_probe(t, flash_info, what).await)
     }
 
@@ -246,7 +285,7 @@ impl Session {
         flash_info: &FlashInfo,
     ) -> Result<HashMap<String, String>, FlashError> {
         self.require_channel(flash_info)?;
-        let config = make_isotp_config(flash_info);
+        let config = self.config(flash_info);
         with_transport!(self, config, |t| read_ecu_with_transport(t).await)
     }
 
@@ -259,7 +298,7 @@ impl Session {
             tracing::warn!("read_dids: {e}");
             return HashMap::new();
         }
-        let config = make_isotp_config(flash_info);
+        let config = self.config(flash_info);
         with_transport!(self, config, |t| read_dids(t, dids).await)
     }
 
@@ -276,7 +315,7 @@ impl Session {
         value: &[u8],
     ) -> Result<(), FlashError> {
         self.require_channel(flash_info)?;
-        let config = make_isotp_config(flash_info);
+        let config = self.config(flash_info);
         with_transport!(self, config, |t| write_did(t, did, value).await)
     }
 
@@ -327,7 +366,7 @@ impl Session {
 
         // Fall back to the module's own STmin, not a global constant: Simos
         // tolerates 400 µs, the transmission and AWD ECUs need 900 µs.
-        let mut config = make_isotp_config(flash_info);
+        let mut config = self.config(flash_info);
         let stmin_us = opts.stmin_override.unwrap_or(flash_info.default_stmin_us);
         config.separation_time_min = Some(std::time::Duration::from_micros(stmin_us as u64));
 
@@ -383,7 +422,57 @@ fn channel_ids(flash_info: &FlashInfo) -> (u32, u32) {
     )
 }
 
+/// Whether one open session can serve every identification channel.
+///
+/// True exactly when the interface carries raw CAN: ISO-TP is then layered per
+/// operation, so any ID pair can be addressed over the one device. A hardware
+/// ISO 15765 channel fixes its addresses at open and can only ever serve the
+/// channel it was opened for — the same split [`Session::can_serve`] reports.
+///
+/// Decided from the interface *before* anything is opened, and deliberately not
+/// by opening a session and asking it. Answering it the second way costs a
+/// whole J2534 device open and close on the native path for a session that is
+/// then thrown away — and worse, races that teardown against the next open,
+/// because [`Session`]'s `Drop` can only hand teardown to a blocking task it
+/// cannot await. `PassThruOpen` landing while the previous device is still
+/// closing is `ERR_DEVICE_IN_USE` on a good DLL and a crash on a bad one.
+fn shares_one_session(interface: &Interface) -> bool {
+    mqb_transport::supports_raw_can(interface)
+}
+
+/// What a bus scan is doing, reported as it happens.
+///
+/// A scan walks three channels and spends [`IDENT_TIMEOUT`] on each silent one,
+/// so even a healthy sweep takes a couple of seconds and a scan against a bench
+/// ECU takes longer. Without this the caller has nothing to show but a static
+/// label, which is indistinguishable from a hang.
+#[derive(Debug, Clone)]
+pub enum ScanProgress {
+    /// About to probe `channel`, the `index`-th of `total`.
+    ChannelStarted {
+        channel: &'static crate::identify::IdentChannel,
+        index: usize,
+        total: usize,
+    },
+    /// `channel` answered and was identified.
+    ChannelAnswered {
+        channel: &'static crate::identify::IdentChannel,
+    },
+    /// Nothing usable on `channel` — silent, refused, or the open failed.
+    /// Expected on the channels whose module is not fitted.
+    ChannelSilent {
+        channel: &'static crate::identify::IdentChannel,
+    },
+}
+
 /// Identify every ECU channel on the bus.
+///
+/// See [`identify_all_channels_with_progress`]; this reports no progress.
+pub async fn identify_all_channels(interface: &Interface) -> Vec<ChannelIdentification> {
+    identify_all_channels_with_progress(interface, |_| {}).await
+}
+
+/// Identify every ECU channel on the bus, reporting progress per channel.
 ///
 /// On a raw-CAN interface this opens the device **once** and walks all the
 /// channels over it — ISO-TP is layered per channel, so the addresses can
@@ -395,23 +484,33 @@ fn channel_ids(flash_info: &FlashInfo) -> (u32, u32) {
 /// Channels that do not answer are simply absent from the result; a probe that
 /// errors is logged and skipped, because one silent channel says nothing about
 /// the others.
-pub async fn identify_all_channels(interface: &Interface) -> Vec<ChannelIdentification> {
+///
+/// `on_progress` is called from the scan's own task, before and after each
+/// channel. Keep it cheap — a send on a channel, not work.
+pub async fn identify_all_channels_with_progress(
+    interface: &Interface,
+    on_progress: impl Fn(ScanProgress),
+) -> Vec<ChannelIdentification> {
     let mut found = Vec::new();
-    let shared = IDENT_CHANNELS
-        .first()
-        .and_then(|c| Session::open(interface, c.probe_flash_info(), None).ok())
-        .filter(|s| {
-            // Only worth keeping if it can actually serve every channel.
-            IDENT_CHANNELS
-                .iter()
-                .all(|c| s.can_serve(c.probe_flash_info()))
-        });
+    let total = IDENT_CHANNELS.len();
+    let shared = if shares_one_session(interface) {
+        IDENT_CHANNELS
+            .first()
+            .and_then(|c| Session::open_for_identify(interface, c.probe_flash_info()).ok())
+    } else {
+        None
+    };
 
-    for channel in IDENT_CHANNELS {
+    for (index, channel) in IDENT_CHANNELS.iter().enumerate() {
+        on_progress(ScanProgress::ChannelStarted {
+            channel,
+            index,
+            total,
+        });
         let flash_info = channel.probe_flash_info();
         let outcome = match &shared {
             Some(session) => session.probe(flash_info, ProbeKind::Identify).await,
-            None => match Session::open(interface, flash_info, None) {
+            None => match Session::open_for_identify(interface, flash_info) {
                 Ok(session) => {
                     let outcome = session.probe(flash_info, ProbeKind::Identify).await;
                     session.close().await;
@@ -421,9 +520,15 @@ pub async fn identify_all_channels(interface: &Interface) -> Vec<ChannelIdentifi
             },
         };
         match outcome {
-            Ok(ProbeOutcome::Identify(Some(ident))) => found.push(ident),
-            Ok(_) => {}
-            Err(e) => tracing::debug!(channel = channel.label, "probe failed: {e}"),
+            Ok(ProbeOutcome::Identify(Some(ident))) => {
+                found.push(ident);
+                on_progress(ScanProgress::ChannelAnswered { channel });
+            }
+            Ok(_) => on_progress(ScanProgress::ChannelSilent { channel }),
+            Err(e) => {
+                tracing::debug!(channel = channel.label, "probe failed: {e}");
+                on_progress(ScanProgress::ChannelSilent { channel });
+            }
         }
     }
 
@@ -476,6 +581,75 @@ mod tests {
         );
         assert!(session.read_ecu_data(&S18_FLASH_INFO).await.is_ok());
         session.close().await;
+    }
+
+    /// A scan must not inherit the flash sequence's 30 s response timeout: two
+    /// of the three channels are normally silent, and waiting `FLASH_TIMEOUT`
+    /// on each is a minute of dead time that reads as a hang.
+    #[tokio::test]
+    async fn identifying_waits_far_less_than_flashing() {
+        let path = fixture("read_ecu_simos18.can");
+        if !path.exists() {
+            eprintln!("skipping: {} is not present", path.display());
+            return;
+        }
+        let iface = Interface::Fake(path);
+
+        let flashing = Session::open(&iface, &S18_FLASH_INFO, None).unwrap();
+        assert_eq!(flashing.config(&S18_FLASH_INFO).timeout, FLASH_TIMEOUT);
+        flashing.close().await;
+
+        let identifying = Session::open_for_identify(&iface, &S18_FLASH_INFO).unwrap();
+        assert_eq!(identifying.config(&S18_FLASH_INFO).timeout, IDENT_TIMEOUT);
+        identifying.close().await;
+
+        assert!(
+            IDENT_TIMEOUT < FLASH_TIMEOUT,
+            "a probe of a possibly-empty address must give up sooner than a flash"
+        );
+    }
+
+    /// `shares_one_session` has to agree with what `can_serve` would have said
+    /// about an opened session, because it replaced exactly that check. If the
+    /// two drift apart the scan either loses the shared-session optimisation or
+    /// starts opening a device it throws away again.
+    #[tokio::test]
+    async fn sharing_one_session_predicts_what_can_serve_would_answer() {
+        let path = fixture("read_ecu_simos18.can");
+        if !path.exists() {
+            eprintln!("skipping: {} is not present", path.display());
+            return;
+        }
+        let iface = Interface::Fake(path);
+        assert!(shares_one_session(&iface), "a fixture carries raw CAN");
+
+        let session = Session::open_for_identify(&iface, &S18_FLASH_INFO).unwrap();
+        assert!(
+            IDENT_CHANNELS
+                .iter()
+                .all(|c| session.can_serve(c.probe_flash_info())),
+            "the predicate promised one session reaches every channel"
+        );
+        session.close().await;
+    }
+
+    /// The native ISO 15765 path must never be asked to open a speculative
+    /// session: its channel is bound to one ID pair, so the session would be
+    /// discarded, and `Drop` cannot await the J2534 teardown it starts — the
+    /// next `PassThruOpen` would race a device that is still closing.
+    #[test]
+    fn a_hardware_isotp_interface_never_opens_a_shared_session() {
+        assert!(!shares_one_session(&Interface::J2534 {
+            dll: None,
+            bitrate: 500_000,
+            native_isotp: true,
+        }));
+        // The raw-CAN J2534 channel is a different story and still shares.
+        assert!(shares_one_session(&Interface::J2534 {
+            dll: None,
+            bitrate: 500_000,
+            native_isotp: false,
+        }));
     }
 
     /// A hardware ISO 15765 connection has no raw CAN to offer, and callers

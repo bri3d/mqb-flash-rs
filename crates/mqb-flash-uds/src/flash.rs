@@ -223,22 +223,50 @@ pub async fn flash_blocks(
 
 // ── ISO-TP config ─────────────────────────────────────────────────────────────
 
+/// Response timeout for an ECU that is known to be there.
+///
+/// The upstream default is 100 ms. An erase of a 1 MB ASW block, or the block
+/// checksum routine, can run for many seconds between response-pending frames —
+/// the Python tool raises p2_server_max and request_timeout to 30 s for exactly
+/// this reason ("setups which lie about their response speed").
+pub const FLASH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Response timeout for finding out *whether* an ECU is there.
+///
+/// A bus scan walks three channels and normally finds something on one of them:
+/// on a bench there is nothing behind the other two, and in a car the modules
+/// that are not fitted are silent. [`FLASH_TIMEOUT`] would charge 30 s of dead
+/// time for each of those, which reads as a hang.
+///
+/// One second is still a wide margin over UDS P2_server (50 ms nominal): an ECU
+/// that needs longer answers `RequestCorrectlyReceivedResponsePending` first,
+/// and `UDSClient` gives every pending response a fresh timeout window — so a
+/// slow-but-present module is not cut off, only a silent address is.
+pub const IDENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// ISO-TP configuration for a module's diagnostic channel.
 ///
 /// `pub` so the wizard can open a transport once and reuse it across
 /// identification, immobilizer pre-flight and flashing, instead of
 /// opening/closing the physical device per operation.
 pub fn make_isotp_config(flash_info: &FlashInfo) -> IsoTPConfig {
+    make_isotp_config_with_timeout(flash_info, FLASH_TIMEOUT)
+}
+
+/// [`make_isotp_config`] with an explicit response timeout.
+///
+/// Separate because how long to wait is a property of the *question* being
+/// asked, not of the module: see [`FLASH_TIMEOUT`] and [`IDENT_TIMEOUT`].
+pub fn make_isotp_config_with_timeout(
+    flash_info: &FlashInfo,
+    timeout: std::time::Duration,
+) -> IsoTPConfig {
     let mut config = IsoTPConfig::new_from_tx_rx(
         0,
         Identifier::from(flash_info.control_module_identifier.txid),
         Identifier::from(flash_info.control_module_identifier.rxid),
     );
-    // Default is 100 ms. An erase of a 1 MB ASW block, or the block checksum
-    // routine, can run for many seconds between response-pending frames — the
-    // Python tool raises p2_server_max and request_timeout to 30 s for exactly
-    // this reason ("setups which lie about their response speed").
-    config.timeout = std::time::Duration::from_secs(30);
+    config.timeout = timeout;
     // VW testers pad with 0x55. The upstream default is 0xAA.
     config.padding = Some(TX_PADDING_BYTE);
     config

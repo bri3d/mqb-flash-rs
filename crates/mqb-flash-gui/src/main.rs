@@ -38,7 +38,7 @@ use mqb_flash_uds::immo::{ImmoReport, ImmoSnapshot, ImmoSupport, Severity};
 use mqb_flash_uds::unlock::{UnlockProbe, UnlockState};
 use mqb_flash_uds::{
     flash_blocks, prepare_block, prepare_patch_block, FlashOptions, Interface, ProbeKind,
-    ProbeOutcome, ProgressUpdate,
+    ProbeOutcome, ProgressUpdate, ScanProgress,
 };
 use mqb_modules::{FlashInfo, PreparedBlockData};
 
@@ -447,6 +447,7 @@ enum Message {
     StminChanged(String),
 
     // Identify
+    ScanProgress(ScanProgress),
     ScanFinished(Vec<ChannelIdentification>),
     CandidateChosen(usize, usize),
 
@@ -528,6 +529,30 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.socketcan_name = keep_iface.1;
             state.j2534_dll_path = keep_iface.2;
             state.stmin_input = keep_iface.3;
+            Task::none()
+        }
+
+        Message::ScanProgress(p) => {
+            match p {
+                ScanProgress::ChannelStarted {
+                    channel,
+                    index,
+                    total,
+                } => {
+                    state.busy = Some(format!(
+                        "Probing {} — address {} of {}…",
+                        channel.label,
+                        index + 1,
+                        total
+                    ));
+                }
+                ScanProgress::ChannelAnswered { channel } => {
+                    state.log(format!("{} answered", channel.label));
+                }
+                ScanProgress::ChannelSilent { channel } => {
+                    state.log(format!("{} did not answer", channel.label));
+                }
+            }
             Task::none()
         }
 
@@ -775,11 +800,33 @@ fn start_scan(state: &mut State) -> Task<Message> {
     state.chosen_candidate = None;
     state.chosen_channel = None;
 
+    // A stream rather than a future: the sweep spends up to `IDENT_TIMEOUT` on
+    // every channel that has nothing behind it, which on a bench is two of the
+    // three. Reporting each channel as it is tried keeps that visible instead
+    // of leaving one static label up for the whole sweep.
+    //
     // One connection for the whole sweep where the interface allows it —
     // opening a J2534 device per channel is seconds of dead time each.
-    Task::future(async move {
-        Message::ScanFinished(mqb_flash_uds::identify_all_channels(&interface).await)
-    })
+    Task::stream(iced::stream::channel(
+        16,
+        move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            use iced::futures::SinkExt;
+
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
+            let scan_tx = tx.clone();
+            tokio::spawn(async move {
+                let results = mqb_flash_uds::identify_all_channels_with_progress(&interface, |p| {
+                    let _ = scan_tx.send(Message::ScanProgress(p));
+                })
+                .await;
+                let _ = tx.send(Message::ScanFinished(results));
+            });
+
+            while let Some(msg) = rx.recv().await {
+                let _ = output.send(msg).await;
+            }
+        },
+    ))
 }
 
 fn start_unlock_probe(state: &mut State) -> Task<Message> {
@@ -1363,8 +1410,15 @@ fn view_interface(state: &State) -> Element<'_, Message> {
 }
 
 fn view_identify(state: &State) -> Element<'_, Message> {
+    // The live per-channel status is already rendered above the body from
+    // `state.busy`; repeating a static line here would only contradict it.
     if state.busy.is_some() {
-        return text("Probing each control module address…").into();
+        return text(
+            "Each address gets a moment to answer, so this takes a few seconds. \
+             Addresses with no module fitted stay silent — that is expected.",
+        )
+        .size(13)
+        .into();
     }
     if state.scan_results.is_empty() {
         return text("Nothing answered. Go back and check the adapter.").into();
