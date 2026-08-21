@@ -131,27 +131,33 @@ pub async fn probe_unlock_state<T: TransportLayer>(
     // 1. Extended session.
     uds.diagnostic_session_control(0x03).await?;
 
-    // 2. Programming precondition. The ECU refuses the programming session if
-    //    this has not run — same order the captured tester session uses.
+    // 2. Programming precondition — same order the captured tester session
+    //    uses. A refusal here is *not* fatal: the ECU frequently answers
+    //    conditionsNotCorrect and still accepts the programming session, which
+    //    is why the flash sequence gets into CBOOT where an earlier version of
+    //    this probe gave up. Note it and keep going; step 3 is the real test.
     if let Err(e) = uds
         .routine_control(RoutineControlType::Start, 0x0203, None)
         .await
     {
-        return Ok(unknown(format!(
-            "the ECU refused the programming precondition check ({e}); \
-             it will not enter the bootloader (engine running, or voltage out of range?)"
-        )));
+        tracing::warn!("Programming precondition check refused ({e}); trying the session anyway");
     }
 
-    uds.tester_present().await?;
+    let _ = uds.tester_present().await;
 
     // 3. Programming session — this is what puts the ECU into CBOOT, and it is
-    //    the whole reason the probe has a side effect.
+    //    the whole reason the probe has a side effect. The SwitchPatch fallback
+    //    is the same one `run_flash_sequence` uses; it is only a way *into*
+    //    CBOOT, never evidence about the unlock state — that comes from the
+    //    `0xF1A3` read below and nowhere else.
     if let Err(e) = uds.diagnostic_session_control(0x02).await {
-        return Ok(unknown(format!(
-            "the ECU would not enter the bootloader ({e}), so its unlock state \
-             cannot be read"
-        )));
+        tracing::warn!("Normal programming session request failed ({e}), trying SwitchPatch");
+        if let Err(fallback) = crate::flash::send_switchpatch(transport).await {
+            return Ok(unknown(format!(
+                "the ECU would not enter the bootloader (normal request: {e}; \
+                 SwitchPatch: {fallback}), so its unlock state cannot be read"
+            )));
+        }
     }
 
     // 4. CBOOT is answering now — read the marker.

@@ -259,6 +259,14 @@ impl Session {
         what: ProbeKind,
     ) -> Result<ProbeOutcome, FlashError> {
         self.require_channel(flash_info)?;
+        // The unlock probe has to enter the programming session, and the ECU
+        // refuses the programming precondition check (0x0203) with
+        // conditionsNotCorrect while emission DTCs are stored. `flash_blocks`
+        // clears them first for exactly this reason; a probe that skips the
+        // clear is refused where the flash that follows it succeeds.
+        if matches!(what, ProbeKind::UnlockState) {
+            self.clear_obd_dtcs().await;
+        }
         let config = self.config(flash_info);
         with_transport!(self, config, |t| run_probe(t, flash_info, what).await)
     }

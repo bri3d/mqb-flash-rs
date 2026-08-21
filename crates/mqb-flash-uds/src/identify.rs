@@ -904,7 +904,10 @@ mod tests {
         let dids = map(&[
             // 5G0906259Q is the known simos1810 box code.
             (DID_SPARE_PART_NUMBER, "5G0906259Q "),
-            (DID_BOOT_LOADER_IDENTIFICATION, "SCB.1 CB.00.00.I0 C02.00 SCB"),
+            (
+                DID_BOOT_LOADER_IDENTIFICATION,
+                "SCB.1 CB.00.00.I0 C02.00 SCB",
+            ),
         ]);
         let c = candidates_from_dids(&dids, channel(ChannelKind::SimosEngine));
         assert_eq!(names(&c), vec!["simos184"]);

@@ -301,7 +301,10 @@ impl State {
             // the operation screen offers that. An Unknown result may proceed
             // too: the check is advisory and fails open.
             Step::Unlock => self.unlock.is_some(),
-            Step::Operation => self.operation.is_some(),
+            Step::Operation => {
+                self.operation.is_some()
+                    && (self.operation != Some(Operation::FullFlash) || self.full_flash_allowed())
+            }
             Step::Firmware => self.firmware.is_some(),
             Step::Preflight => {
                 self.prepared.is_some() && (!self.preflight_has_risk() || self.risk_acknowledged)
@@ -324,6 +327,18 @@ impl State {
             (Some(fi), Some(fw), Some(op)) => immo_check_applies(fi, fw, op),
             _ => false,
         }
+    }
+
+    /// Whether a full flash may be offered at all.
+    ///
+    /// Choosing an unlock file on the unlock screen says the ECU is locked and
+    /// the next thing to write is the unlock patch. Following that with a full
+    /// flash instead — rewriting the bootloader, application software and tune
+    /// of an ECU that is still locked, from the file picked for the unlock — is
+    /// the way to end up with an ECU that does not run. Unlock first, then come
+    /// back through the wizard for the full flash.
+    fn full_flash_allowed(&self) -> bool {
+        self.unlock_file.is_none()
     }
 
     /// Whether an unlock step applies to the identified module at all.
@@ -460,6 +475,7 @@ enum Message {
     UnlockProbeFinished(Result<UnlockProbe, String>),
     BrowseUnlockFile,
     UnlockFileSelected(Option<PathBuf>),
+    ClearUnlockFile,
 
     // Operation / firmware
     OperationChosen(Operation),
@@ -631,6 +647,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         // them apart is what distinguishes an unlock file.
                         state.unlock_file = Some(path);
                         state.firmware = Some(info);
+                        // A full flash chosen earlier (by going back) is no
+                        // longer on offer — see `State::full_flash_allowed`.
+                        if state.operation == Some(Operation::FullFlash) {
+                            state.operation = None;
+                            state.prepared = None;
+                        }
                     }
                     Err(e) => {
                         state.unlock_file = None;
@@ -645,7 +667,27 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::ClearUnlockFile => {
+            state.unlock_file = None;
+            state.unlock_file_error = None;
+            // The unlock screen is the only thing that put a file in
+            // `firmware` without a `firmware_path`; drop it with the choice.
+            if state.firmware_path.is_none() {
+                state.firmware = None;
+            }
+            if state.operation == Some(Operation::Unlock) {
+                state.operation = None;
+            }
+            state.prepared = None;
+            Task::none()
+        }
+
         Message::OperationChosen(op) => {
+            // Defence in depth: the radio is not rendered when a full flash is
+            // disallowed, so this only fires on a stale message.
+            if op == Operation::FullFlash && !state.full_flash_allowed() {
+                return Task::none();
+            }
             state.operation = Some(op);
             state.prepared = None;
             // The unlock screen puts the unlock file into `firmware`. Switching
@@ -1558,7 +1600,23 @@ fn unlock_file_picker(state: &State) -> Element<'_, Message> {
     if let Some(err) = &state.unlock_file_error {
         col = col.push(callout("This file cannot be used", err));
     } else if state.unlock_file.is_some() {
-        col = col.push(text("File accepted — choose Unlock on the next screen.").size(13));
+        col = col.push(
+            row![
+                text("File accepted — choose Unlock on the next screen.").size(13),
+                button("Clear")
+                    .on_press(Message::ClearUnlockFile)
+                    .padding([4, 10]),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        );
+        col = col.push(
+            text(
+                "Clearing the file gives up on the unlock and puts the full flash back on \
+                 the next screen.",
+            )
+            .size(12),
+        );
     }
 
     col.into()
@@ -1621,26 +1679,37 @@ fn view_operation(state: &State) -> Element<'_, Message> {
         .padding(iced::Padding::new(0.0).bottom(6).left(26)),
     );
 
-    col = col.push(
-        radio(
-            "Full flash",
-            Operation::FullFlash,
-            state.operation,
-            Message::OperationChosen,
-        )
-        .size(15),
-    );
-    col = col.push(
-        container(
-            text(
-                "Rewrites the bootloader, application software and tune, and patches the \
-                 bootloader into sample mode so the ECU keeps accepting modified software. \
-                 Use this to change software version or recover an ECU.",
+    // A chosen unlock file means the pending operation is the unlock; a full
+    // flash is not offered at all until that choice is cleared.
+    if state.full_flash_allowed() {
+        col = col.push(
+            radio(
+                "Full flash",
+                Operation::FullFlash,
+                state.operation,
+                Message::OperationChosen,
             )
-            .size(12),
-        )
-        .padding(iced::Padding::new(0.0).bottom(6).left(26)),
-    );
+            .size(15),
+        );
+        col = col.push(
+            container(
+                text(
+                    "Rewrites the bootloader, application software and tune, and patches the \
+                     bootloader into sample mode so the ECU keeps accepting modified software. \
+                     Use this to change software version or recover an ECU.",
+                )
+                .size(12),
+            )
+            .padding(iced::Padding::new(0.0).bottom(6).left(26)),
+        );
+    } else {
+        col = col.push(callout(
+            "Full flash is not available here",
+            "You chose an unlock file on the previous screen, so the operation to run now is \
+             the unlock. Unlock the ECU first, then start the wizard again to full flash it. \
+             To full flash instead, go back and clear the unlock file.",
+        ));
+    }
 
     // Relocking only means anything on a module whose bootloader we would
     // otherwise patch.

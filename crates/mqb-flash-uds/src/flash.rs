@@ -284,7 +284,7 @@ pub(crate) async fn run_with_transport<T: TransportLayer>(
 /// This cannot go through [`UDSClient`]: a patched ASW answers with `50 02 …`,
 /// but `UDSClient` would enforce a `0x7E` echo for a `0x3E` request and reject
 /// it as `InvalidServiceId`. Both `0x7E` and `0x50` are accepted here.
-async fn send_switchpatch<T: TransportLayer>(transport: &T) -> Result<(), FlashError> {
+pub(crate) async fn send_switchpatch<T: TransportLayer>(transport: &T) -> Result<(), FlashError> {
     transport
         .send(&[0x3E, 0x10, 0x02])
         .await
