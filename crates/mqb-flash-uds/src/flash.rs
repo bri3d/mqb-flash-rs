@@ -78,11 +78,10 @@ pub enum ProgressUpdate {
     /// The normal programming-session request was refused and the SwitchPatch
     /// fallback (`3E 10 02`) was accepted.
     ///
-    /// This is **not** evidence that the ECU is unlocked. This tool does not
-    /// apply SwitchPatch, so the fallback's success says nothing about whether
-    /// our CBOOT sample-mode patch is present. Unlock state is determined by
-    /// [`crate::unlock::probe_unlock_state`], which reads the hardware version
-    /// from inside CBOOT.
+    /// **Not** evidence that the ECU is unlocked: this tool does not apply
+    /// SwitchPatch, so the fallback's success says nothing about our CBOOT
+    /// sample-mode patch. Unlock state comes from
+    /// [`crate::unlock::probe_unlock_state`].
     SwitchPatchUsed,
     /// Step 7: SA2 seed-key authentication.
     Authenticating,
@@ -140,13 +139,10 @@ pub struct FlashOptions {
 
 // ── Windows timer resolution ─────────────────────────────────────────────────
 
-/// RAII guard that sets the Windows multimedia timer resolution to 1 ms for the
-/// duration of the flash sequence.  Without this, `std::thread::sleep` and
-/// `tokio::time::sleep` on Windows quantize to the default system tick of
-/// ~15.625 ms, making software ISO-TP (which sleeps for STmin between each
-/// consecutive frame) roughly 30× slower than necessary.
-///
-/// On non-Windows platforms this is a no-op.
+/// Raises the Windows multimedia timer resolution to 1 ms for the duration of
+/// the flash. Without it, `sleep` quantizes to the ~15.625 ms system tick,
+/// making software ISO-TP (which sleeps for STmin between consecutive frames)
+/// roughly 30× slower than necessary. No-op on other platforms.
 #[cfg(windows)]
 struct HighResTimerGuard;
 
@@ -193,12 +189,11 @@ impl HighResTimerGuard {
 
 /// Flash a set of prepared blocks to an ECU.
 ///
-/// Blocks are flashed in the order provided by the caller — no internal
-/// reordering is performed.  For normal flashing, sort by block number.
-/// For unlock, provide blocks in unlock order: [1, 2, 3, 4, patch, 5].
-/// Opens a connection, flashes, and closes it. Callers doing several
-/// operations should open a [`Session`] once and call
-/// [`Session::flash_blocks`] instead of reopening the device each time.
+/// Blocks are flashed in the order provided — no internal reordering. Sort by
+/// block number for a normal flash; for unlock use [1, 2, 3, 4, patch, 5].
+///
+/// Opens and closes the connection. Callers doing several operations should
+/// open a [`Session`] once and call [`Session::flash_blocks`] instead.
 pub async fn flash_blocks(
     flash_info: &FlashInfo,
     blocks: Vec<PreparedBlockData>,
@@ -225,30 +220,23 @@ pub async fn flash_blocks(
 
 /// Response timeout for an ECU that is known to be there.
 ///
-/// The upstream default is 100 ms. An erase of a 1 MB ASW block, or the block
-/// checksum routine, can run for many seconds between response-pending frames —
-/// the Python tool raises p2_server_max and request_timeout to 30 s for exactly
-/// this reason ("setups which lie about their response speed").
+/// The upstream default is 100 ms. Erasing a 1 MB ASW block, or the block
+/// checksum routine, can run for many seconds between response-pending frames.
 pub const FLASH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Response timeout for finding out *whether* an ECU is there.
 ///
-/// A bus scan walks three channels and normally finds something on one of them:
-/// on a bench there is nothing behind the other two, and in a car the modules
-/// that are not fitted are silent. [`FLASH_TIMEOUT`] would charge 30 s of dead
-/// time for each of those, which reads as a hang.
-///
-/// One second is still a wide margin over UDS P2_server (50 ms nominal): an ECU
-/// that needs longer answers `RequestCorrectlyReceivedResponsePending` first,
-/// and `UDSClient` gives every pending response a fresh timeout window — so a
-/// slow-but-present module is not cut off, only a silent address is.
+/// A scan walks three channels and normally finds one; [`FLASH_TIMEOUT`] would
+/// charge 30 s of dead time per silent address, which reads as a hang. One
+/// second is still a wide margin over UDS P2_server (50 ms nominal), and
+/// `UDSClient` gives every responsePending a fresh window, so a slow-but-present
+/// module is not cut off — only a silent address is.
 pub const IDENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// ISO-TP configuration for a module's diagnostic channel.
 ///
-/// `pub` so the wizard can open a transport once and reuse it across
-/// identification, immobilizer pre-flight and flashing, instead of
-/// opening/closing the physical device per operation.
+/// `pub` so the wizard can open one transport and reuse it across
+/// identification, immobilizer pre-flight and flashing.
 pub fn make_isotp_config(flash_info: &FlashInfo) -> IsoTPConfig {
     make_isotp_config_with_timeout(flash_info, FLASH_TIMEOUT)
 }
@@ -293,12 +281,9 @@ pub(crate) async fn run_with_transport<T: TransportLayer>(
 
 /// Send the SwitchPatch programming-session request (`3E 10 02`) raw.
 ///
-/// This cannot go through [`UDSClient`]: a patched ASW answers with `50 02 …`
-/// (the DiagnosticSessionControl positive response), but `UDSClient` would
-/// enforce a `0x7E` echo for a `0x3E` request and reject it as
-/// `InvalidServiceId`. Both `0x7E` and `0x50` are accepted here.
-///
-/// Returns `Ok(())` if the ECU accepted the request.
+/// This cannot go through [`UDSClient`]: a patched ASW answers with `50 02 …`,
+/// but `UDSClient` would enforce a `0x7E` echo for a `0x3E` request and reject
+/// it as `InvalidServiceId`. Both `0x7E` and `0x50` are accepted here.
 async fn send_switchpatch<T: TransportLayer>(transport: &T) -> Result<(), FlashError> {
     transport
         .send(&[0x3E, 0x10, 0x02])
@@ -346,14 +331,12 @@ pub(crate) fn send_progress(opts: &FlashOptions, update: ProgressUpdate) {
 
 // ── OBD-II DTC clear ──────────────────────────────────────────────────────────
 
-/// Send OBD-II mode 04 (Clear Emission-Related DTCs) using the supplied transport.
+/// Send OBD-II mode 04 (Clear Emission-Related DTCs) over the supplied transport.
 ///
-/// Sends the single byte `0x04` as an ISO-TP PDU and waits for the positive
-/// response (`0x44`).  The ECU may send one or more NRC 0x78
-/// (requestCorrectlyReceivedResponsePending) before the final answer — these
-/// are consumed transparently.  Each pending response resets the 5 s timeout.
-/// Errors and timeouts are logged and ignored — a failed DTC clear must not
-/// abort the flash sequence.
+/// Sends `0x04` as an ISO-TP PDU and waits for `0x44`. NRC 0x78
+/// (responsePending) is consumed transparently, each one resetting the 5 s
+/// timeout. Errors and timeouts are logged and ignored — a failed DTC clear
+/// must not abort the flash sequence.
 pub(crate) async fn send_obd_dtc_clear<T: TransportLayer>(transport: &T) {
     tracing::info!("Sending OBD-II mode 04 (Clear DTCs) [tester=0x700, ECU=0x7E8]");
     if let Err(e) = transport.send(&[0x04]).await {
@@ -392,11 +375,9 @@ pub(crate) async fn send_obd_dtc_clear<T: TransportLayer>(transport: &T) {
     }
 }
 
-/// Convenience wrapper for CAN-adapter–based paths.
-///
-/// Creates a temporary [`IsoTPAdapter`] on the shared adapter with the
-/// fixed OBD-II IDs (tester TX = 0x700, ECU RX = 0x7E8), calls
-/// [`send_obd_dtc_clear`], then discards the adapter.
+/// Convenience wrapper for CAN-adapter–based paths: builds a temporary
+/// [`IsoTPAdapter`] on the fixed OBD-II IDs (TX 0x700, RX 0x7E8), calls
+/// [`send_obd_dtc_clear`], then discards it.
 pub(crate) async fn send_obd_dtc_clear_via_adapter(adapter: &AsyncCanAdapter) {
     let mut config =
         IsoTPConfig::new_from_tx_rx(0, Identifier::from(0x700u32), Identifier::from(0x7E8u32));
@@ -449,8 +430,8 @@ async fn run_flash_sequence<T: TransportLayer>(
         match send_switchpatch(transport).await {
             Ok(()) => send_progress(opts, ProgressUpdate::SwitchPatchUsed),
             Err(fallback_err) => {
-                // Report both: the original refusal explains *why* we fell back,
-                // the fallback error explains why the fallback did not save us.
+                // The refusal explains why we fell back; the fallback error
+                // explains why that did not save us.
                 tracing::warn!("SwitchPatch also failed: {fallback_err}");
                 return Err(FlashError::Interface(format!(
                     "Could not enter programming session. \
@@ -578,11 +559,10 @@ async fn flash_normal_block<T: TransportLayer>(
             .await?;
     }
 
-    // Request download: 1-byte address (block_id), 4-byte size (uncompressed
-    // block length). This comes from the prepared block, not the static table:
-    // modules with dynamic block lengths (Haldex) store the real length in the
-    // block header, and it differs from the table by up to 0x1B18 bytes on
-    // real firmware.
+    // Request download: 1-byte address (block_id), 4-byte uncompressed length.
+    // From the prepared block, not the static table: modules with dynamic block
+    // lengths (Haldex) store the real length in the block header, differing by
+    // up to 0x1B18 bytes on real firmware.
     let size_be = block.announced_length.to_be_bytes();
 
     send_progress(
@@ -601,12 +581,10 @@ async fn flash_normal_block<T: TransportLayer>(
         )
         .await?;
 
-    // Transfer data.
-    //
-    // Per ISO 14229 the ECU's `maxNumberOfBlockLength` counts the TransferData
-    // SID and blockSequenceCounter, so the usable payload is 2 bytes less.
-    // This is inert on Simos18 (0xFFD configured vs 0xFFF reported) but bites
-    // the strict transmission ECUs, whose configured sizes are 0xF0 / 0x100.
+    // Transfer data. Per ISO 14229 the ECU's `maxNumberOfBlockLength` counts
+    // the TransferData SID and blockSequenceCounter, so the usable payload is
+    // 2 bytes less. Inert on Simos18 (0xFFD vs 0xFFF reported), but it bites
+    // the strict transmission ECUs, configured at 0xF0 / 0x100.
     let transfer_size = flash_info
         .block_transfer_size(block.block_number)
         .unwrap_or(0xFFD)
@@ -665,10 +643,9 @@ async fn flash_normal_block<T: TransportLayer>(
 
 // ── Patch block (>5, WriteWithoutErase) ───────────────────────────────────────
 
-/// WriteWithoutErase depends on resending a chunk until the flash controller's
-/// assembly page is ready, so a negative response is an expected, routine part
-/// of the handshake rather than an error. Python loops without a bound; this
-/// cap only exists to stop a truly wedged ECU from spinning forever.
+/// WriteWithoutErase resends a chunk until the flash controller's assembly page
+/// is ready, so a negative response is a routine part of the handshake. Python
+/// loops unbounded; this cap only stops a wedged ECU spinning forever.
 const MAX_PATCH_RETRIES: usize = 200;
 
 async fn flash_patch_block<T: TransportLayer>(
@@ -738,10 +715,9 @@ async fn flash_patch_block<T: TransportLayer>(
                     success = true;
                     break;
                 }
-                // Only a negative response means "not ready, send it again".
-                // A timeout or a transport error means the link is broken —
-                // retrying then just burns through the budget and leaves the
-                // block half-written with a misleading final error.
+                // Only a negative response means "not ready, send it again". A
+                // timeout or transport error means the link is broken, so
+                // retrying burns the budget and leaves the block half-written.
                 Err(automotive::Error::UDSError(automotive::uds::Error::NegativeResponse(nrc)))
                     if attempt + 1 < MAX_PATCH_RETRIES =>
                 {
@@ -803,9 +779,8 @@ pub enum ProbeOutcome {
 
 /// Run one read-only probe against an ECU.
 ///
-/// Opens the physical device, asks the question, and closes it again. A caller
-/// asking several questions in a row should open a [`Session`] once and call
-/// [`Session::probe`] rather than paying for an open and close each time.
+/// Opens and closes the physical device. A caller asking several questions in a
+/// row should open a [`Session`] once and call [`Session::probe`].
 pub async fn probe(
     interface: &Interface,
     flash_info: &'static FlashInfo,
@@ -856,10 +831,10 @@ pub async fn read_ecu_data(
     result
 }
 
-/// Read the standard data-record sweep and return it keyed by human description.
+/// Read the standard data-record sweep, keyed by human description.
 ///
-/// Note this collapses the records whose `description` is empty — prefer
-/// [`read_dids`] when you need the raw bytes for a specific DID.
+/// Collapses the records whose `description` is empty — prefer [`read_dids`]
+/// when you need raw bytes for a specific DID.
 pub async fn read_ecu_with_transport<T: TransportLayer>(
     transport: &T,
 ) -> Result<HashMap<String, String>, FlashError> {
@@ -880,8 +855,7 @@ pub async fn read_ecu_with_transport<T: TransportLayer>(
                         .collect::<Vec<_>>()
                         .join(" ")
                 };
-                // Seven DATA_RECORDS entries have an empty description; keying
-                // by it alone would silently collapse them onto one another.
+                // Seven DATA_RECORDS entries have an empty description.
                 let key = if record.description.is_empty() {
                     format!("DID 0x{:04X}", record.address)
                 } else {
@@ -903,11 +877,10 @@ pub async fn read_ecu_with_transport<T: TransportLayer>(
 
 /// Read a specific set of DIDs over an already-open transport, keyed by DID.
 ///
-/// Unlike [`read_ecu_data`] this does not open or close the physical device and
-/// does not sweep all 38 records — a bus scan across three candidate modules
-/// would otherwise cost three full open/close cycles and 114 requests.
-///
-/// DIDs the ECU refuses are simply absent from the map; that is normal and is
+/// Unlike [`read_ecu_data`] this neither opens the device nor sweeps all 38
+/// records — a scan across three candidate modules would otherwise cost three
+/// open/close cycles and 114 requests. Refused DIDs are simply absent from the
+/// map; that is normal, and itself an identification signal.
 /// itself a useful identification signal.
 pub async fn read_dids<T: TransportLayer>(transport: &T, dids: &[u16]) -> HashMap<u16, Vec<u8>> {
     let uds = UDSClient::new(transport);
@@ -925,8 +898,8 @@ pub async fn read_dids<T: TransportLayer>(transport: &T, dids: &[u16]) -> HashMa
 
 /// Write one DID over an already-open transport.
 ///
-/// Unlike [`read_dids`] this reports failure: a write that the ECU refuses is
-/// something the caller has to know about, not something to skip past.
+/// Unlike [`read_dids`] this reports failure: a refused write is something the
+/// caller has to know about.
 pub async fn write_did<T: TransportLayer>(
     transport: &T,
     did: u16,

@@ -12,9 +12,9 @@
 //! * **manual entry** of the individual fields, for a record reconstructed by
 //!   hand.
 //!
-//! Whichever is used, the result is an [`ImmoSecrets`] — and where the source
-//! carries one, the [`ImmoRecord`] and the [`Dump`] behind it, so the DFlash
-//! editor can work on the same data.
+//! Whichever is used, the result is an [`ImmoSecrets`] — plus the
+//! [`ImmoRecord`] and [`Dump`] behind it where the source carries them, so the
+//! DFlash editor can work on the same data.
 
 use std::path::PathBuf;
 

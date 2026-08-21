@@ -1,30 +1,27 @@
 //! One ECU connection, held open across several operations.
+//! One ECU connection, held open across several operations.
 //!
-//! Opening a physical interface is not free — a J2534 device in particular
-//! spins up DLL threads and a hardware channel on open and joins them again on
-//! close, which takes long enough to be visible in a UI. A wizard that scans,
-//! then probes the unlock state, then reads the immobilizer status, then
-//! flashes would pay that four times over, and the ECU sees four separate
-//! sessions where it should see one.
+//! Opening a physical interface is not free — a J2534 device spins up DLL
+//! threads and a hardware channel on open and joins them again on close. A
+//! wizard that scans, probes the unlock state, reads the immobilizer status and
+//! then flashes would pay that four times, and the ECU would see four sessions
+//! where it should see one.
 //!
-//! [`Session`] owns the connection instead. Every operation runs over the
-//! already-open device, and the free functions in [`crate::flash`] are thin
-//! wrappers that open a session, do one thing, and close it — so a caller that
-//! only wants one operation still gets the old behaviour.
+//! [`Session`] owns the connection instead; the free functions in
+//! [`crate::flash`] are thin wrappers that open one, do a single thing, and
+//! close it.
 //!
 //! # The two shapes a connection can take
 //!
 //! * **Raw CAN** ([`Interface::SocketCan`], [`Interface::Panda`],
 //!   [`Interface::Fake`], and `j2534` without native ISO-TP). The session owns
-//!   an [`AsyncCanAdapter`]; software ISO-TP is layered on top per operation.
-//!   That wrapper is cheap, so each operation still gets exactly the ISO-TP
-//!   configuration it wants — and because the adapter fans frames out over a
-//!   broadcast channel, more than one reader can share it. That is what lets
+//!   an [`AsyncCanAdapter`] and layers software ISO-TP per operation, so each
+//!   gets exactly the configuration it wants. The adapter fans frames out over
+//!   a broadcast channel, so several readers can share it — that is what lets
 //!   the immobilizer tool answer authentication frames while polling UDS.
 //! * **Hardware ISO 15765** (`j2534-isotp`). The channel *is* the connection
-//!   and its ID pair and timing are fixed when it opens, so the session holds
-//!   the transport directly. There are no raw CAN frames to see, so
-//!   [`Session::raw_can`] returns `None`.
+//!   and its ID pair and timing are fixed at open, so the session holds the
+//!   transport directly and [`Session::raw_can`] returns `None`.
 
 use std::collections::HashMap;
 
@@ -59,10 +56,9 @@ const OBD_ECU_ID: u32 = 0x7E8;
 /// An open connection to an ECU.
 ///
 /// Dropping it closes the device. Prefer [`Session::close`] inside an async
-/// context: J2534 teardown joins DLL threads, and doing that on the executor
-/// stalls every other task — in a GUI, that is a multi-second freeze. `Drop`
-/// falls back to moving the teardown onto a blocking thread when a Tokio
-/// runtime is available.
+/// context: J2534 teardown joins DLL threads, and doing that on the executor is
+/// a multi-second GUI freeze. `Drop` falls back to a blocking thread when a
+/// Tokio runtime is available.
 pub struct Session {
     interface: Interface,
     inner: Option<Inner>,
@@ -93,10 +89,8 @@ struct NativeChannel {
 /// Run `body` over whatever transport this session has.
 ///
 /// A macro rather than a method because [`automotive::TransportLayer`] has
-/// `async fn`s and so is not object-safe: the two arms have different concrete
-/// types and cannot be unified behind a `dyn`. Expanding inline keeps the
-/// generic call sites monomorphised, exactly as the per-interface functions
-/// this replaced did.
+/// `async fn`s and so is not object-safe — the two arms have different concrete
+/// types. Expanding inline keeps the call sites monomorphised.
 macro_rules! with_transport {
     ($session:expr, $config:expr, |$t:ident| $body:expr) => {{
         match $session.inner.as_ref().expect("session is open") {
@@ -117,10 +111,8 @@ macro_rules! with_transport {
 impl Session {
     /// Open a connection to `flash_info`'s diagnostic channel.
     ///
-    /// `stmin_override` is only consumed by the hardware ISO 15765 path, where
-    /// the channel's TX pacing is fixed at open. On the raw-CAN path each
-    /// operation builds its own ISO-TP layer, so the flash sequence applies its
-    /// own STmin there.
+    /// `stmin_override` is consumed only by the hardware ISO 15765 path, where
+    /// TX pacing is fixed at open; the raw-CAN path sets STmin per operation.
     pub fn open(
         interface: &Interface,
         flash_info: &FlashInfo,
@@ -131,13 +123,12 @@ impl Session {
 
     /// Open a connection for identifying what is on a channel.
     ///
-    /// Same as [`Session::open`] but with [`IDENT_TIMEOUT`] instead of
-    /// [`FLASH_TIMEOUT`], because a scan asks addresses that may have nothing
-    /// behind them and must not spend half a minute finding that out.
+    /// [`Session::open`] with [`IDENT_TIMEOUT`] instead of [`FLASH_TIMEOUT`],
+    /// because a scan asks addresses that may have nothing behind them.
     ///
     /// **Read-only probing only.** On the hardware ISO 15765 path the timeout
-    /// is fixed when the channel opens and cannot be raised again afterwards,
-    /// so a session opened this way must not be used to flash.
+    /// is fixed at open and cannot be raised again, so a session opened this
+    /// way must not be used to flash.
     pub fn open_for_identify(
         interface: &Interface,
         flash_info: &FlashInfo,
@@ -153,9 +144,8 @@ impl Session {
     ) -> Result<Self, FlashError> {
         tracing::info!(interface = %interface, project = flash_info.project_name, "Opening session");
 
-        // Only the hardware ISO 15765 path consumes this: there the channel's
-        // TX pacing is fixed at open, so it has to be known now. Everywhere
-        // else the flash sequence applies its own STmin per operation.
+        // Only the hardware ISO 15765 path consumes this — there the channel's
+        // TX pacing is fixed at open. Elsewhere the flash sequence sets STmin.
         #[cfg(not(feature = "j2534"))]
         let _ = stmin_override;
 
@@ -208,9 +198,8 @@ impl Session {
 
     /// ISO-TP configuration for an operation on this session.
     ///
-    /// Only consulted on the raw-CAN path, where the ISO-TP layer is rebuilt
-    /// per operation; the hardware ISO 15765 channel already carries the
-    /// timeout it was opened with.
+    /// Only consulted on the raw-CAN path; a hardware ISO 15765 channel already
+    /// carries the timeout it was opened with.
     fn config(&self, flash_info: &FlashInfo) -> IsoTPConfig {
         make_isotp_config_with_timeout(flash_info, self.timeout)
     }
@@ -221,13 +210,10 @@ impl Session {
     /// any ID pair can be addressed over the one adapter — which is what lets a
     /// bus scan walk every channel on a single open device.
     ///
-    /// On a hardware ISO 15765 connection the ID pair is fixed when the channel
-    /// opens, so only the channel it was opened for can be reached. Asking for
-    /// another would silently talk to the wrong ECU, so the operations refuse
-    /// instead.
+    /// On a hardware ISO 15765 connection the ID pair is fixed at open, so
+    /// asking for another would silently talk to the wrong ECU; the operations
+    /// refuse instead.
     pub fn can_serve(&self, flash_info: &FlashInfo) -> bool {
-        // `flash_info` only matters on the hardware ISO-TP path, where the
-        // channel's addresses were fixed at open.
         #[cfg(not(feature = "j2534"))]
         let _ = flash_info;
 
@@ -254,12 +240,10 @@ impl Session {
 
     /// The underlying CAN adapter, when this connection carries raw frames.
     ///
-    /// `None` on a hardware ISO 15765 channel, where the adapter firmware owns
-    /// the framing and only whole PDUs are visible. Callers that need raw CAN —
-    /// immobilizer master emulation is the one — must handle that.
-    ///
-    /// The adapter broadcasts received frames, so reading from it does not take
-    /// frames away from UDS traffic on the same session.
+    /// `None` on a hardware ISO 15765 channel, where the firmware owns the
+    /// framing. Callers that need raw CAN — immobilizer master emulation is the
+    /// one — must handle that. The adapter broadcasts, so reading from it does
+    /// not take frames away from UDS traffic on the same session.
     pub fn raw_can(&self) -> Option<&AsyncCanAdapter> {
         match self.inner.as_ref()? {
             Inner::Can(adapter) => Some(adapter),
@@ -290,9 +274,7 @@ impl Session {
     }
 
     /// Read a list of DIDs, in order, returning only the ones the ECU answered.
-    ///
-    /// Returns an empty map when the session cannot reach that channel — the
-    /// same fail-open shape as a DID the ECU simply refuses.
+    /// An unreachable channel yields an empty map, like a refused DID.
     pub async fn read_dids(&self, flash_info: &FlashInfo, dids: &[u16]) -> HashMap<u16, Vec<u8>> {
         if let Err(e) = self.require_channel(flash_info) {
             tracing::warn!("read_dids: {e}");
@@ -304,10 +286,9 @@ impl Session {
 
     /// Write one DID.
     ///
-    /// No session or SecurityAccess is opened first: the immobilizer's two
-    /// write DIDs (`0x2E1` login and `0x2E2` download) are dispatched by the
-    /// ECU ahead of every session and security check, so the default session is
-    /// where they belong.
+    /// No session or SecurityAccess is opened first: the immobilizer's write
+    /// DIDs (`0x2E1` login, `0x2E2` download) are dispatched ahead of every
+    /// session and security check, so the default session is where they belong.
     pub async fn write_did(
         &self,
         flash_info: &FlashInfo,
@@ -321,10 +302,9 @@ impl Session {
 
     /// Send the OBD-II mode `0x04` emission DTC clear. Best effort.
     ///
-    /// VW ECUs want this before the programming precondition check. It runs on
-    /// the fixed OBD-II ID pair rather than the module's own channel, so on a
-    /// hardware ISO 15765 connection it needs a second channel of its own — the
-    /// one case where a device really does have to be reopened.
+    /// VW ECUs want this before the programming precondition check. It uses the
+    /// fixed OBD-II ID pair, so a hardware ISO 15765 connection needs a second
+    /// channel of its own — the one case where the device must be reopened.
     pub async fn clear_obd_dtcs(&self) {
         match self.inner.as_ref().expect("session is open") {
             Inner::Can(adapter) => send_obd_dtc_clear_via_adapter(adapter).await,
@@ -350,10 +330,7 @@ impl Session {
         }
     }
 
-    /// Flash a set of prepared blocks.
-    ///
-    /// Blocks go out in the order given — no reordering happens here. For a
-    /// normal flash, sort by block number; for unlock, use the unlock order.
+    /// Flash a set of prepared blocks, in the order given — no reordering here.
     pub async fn flash_blocks(
         &self,
         flash_info: &FlashInfo,
@@ -426,26 +403,23 @@ fn channel_ids(flash_info: &FlashInfo) -> (u32, u32) {
 ///
 /// True exactly when the interface carries raw CAN: ISO-TP is then layered per
 /// operation, so any ID pair can be addressed over the one device. A hardware
-/// ISO 15765 channel fixes its addresses at open and can only ever serve the
-/// channel it was opened for — the same split [`Session::can_serve`] reports.
+/// ISO 15765 channel fixes its addresses at open — the same split
+/// [`Session::can_serve`] reports.
 ///
-/// Decided from the interface *before* anything is opened, and deliberately not
-/// by opening a session and asking it. Answering it the second way costs a
-/// whole J2534 device open and close on the native path for a session that is
-/// then thrown away — and worse, races that teardown against the next open,
-/// because [`Session`]'s `Drop` can only hand teardown to a blocking task it
-/// cannot await. `PassThruOpen` landing while the previous device is still
-/// closing is `ERR_DEVICE_IN_USE` on a good DLL and a crash on a bad one.
+/// Decided from the interface *before* anything is opened. Answering it by
+/// opening a session and asking costs a whole J2534 open/close for a session
+/// that is then thrown away, and races that teardown against the next open —
+/// [`Session`]'s `Drop` can only hand teardown to a blocking task it cannot
+/// await, and `PassThruOpen` landing mid-close is `ERR_DEVICE_IN_USE` at best.
 fn shares_one_session(interface: &Interface) -> bool {
     mqb_transport::supports_raw_can(interface)
 }
 
 /// What a bus scan is doing, reported as it happens.
 ///
-/// A scan walks three channels and spends [`IDENT_TIMEOUT`] on each silent one,
-/// so even a healthy sweep takes a couple of seconds and a scan against a bench
-/// ECU takes longer. Without this the caller has nothing to show but a static
-/// label, which is indistinguishable from a hang.
+/// A scan spends [`IDENT_TIMEOUT`] on each silent channel, so even a healthy
+/// sweep takes seconds; without progress the caller has only a static label,
+/// which is indistinguishable from a hang.
 #[derive(Debug, Clone)]
 pub enum ScanProgress {
     /// About to probe `channel`, the `index`-th of `total`.
@@ -474,19 +448,16 @@ pub async fn identify_all_channels(interface: &Interface) -> Vec<ChannelIdentifi
 
 /// Identify every ECU channel on the bus, reporting progress per channel.
 ///
-/// On a raw-CAN interface this opens the device **once** and walks all the
-/// channels over it — ISO-TP is layered per channel, so the addresses can
-/// change without touching the hardware. On a hardware ISO 15765 interface the
-/// channel's addresses are fixed at open, so there is no choice but to open one
-/// per channel; that is what this does, and it is why a J2534 scan is slower
-/// through `j2534-isotp` than through `j2534`.
+/// On a raw-CAN interface this opens the device **once** and walks all channels
+/// over it, layering ISO-TP per channel. A hardware ISO 15765 channel fixes its
+/// addresses at open, so there it must open one device per channel — which is
+/// why a scan is slower through `j2534-isotp` than through `j2534`.
 ///
-/// Channels that do not answer are simply absent from the result; a probe that
-/// errors is logged and skipped, because one silent channel says nothing about
-/// the others.
+/// Channels that do not answer are absent from the result; a probe that errors
+/// is logged and skipped.
 ///
-/// `on_progress` is called from the scan's own task, before and after each
-/// channel. Keep it cheap — a send on a channel, not work.
+/// `on_progress` runs on the scan's own task before and after each channel —
+/// keep it cheap.
 pub async fn identify_all_channels_with_progress(
     interface: &Interface,
     on_progress: impl Fn(ScanProgress),
@@ -564,9 +535,7 @@ mod tests {
             .join(name)
     }
 
-    /// One session, several operations: the point of the type. A fixture-backed
-    /// adapter stands in for a device, and the ISO-TP layer is rebuilt per
-    /// operation over the same adapter.
+    /// One session, several operations: the point of the type.
     #[tokio::test]
     async fn a_fake_session_answers_more_than_one_operation() {
         let path = fixture("read_ecu_simos18.can");
@@ -583,9 +552,7 @@ mod tests {
         session.close().await;
     }
 
-    /// A scan must not inherit the flash sequence's 30 s response timeout: two
-    /// of the three channels are normally silent, and waiting `FLASH_TIMEOUT`
-    /// on each is a minute of dead time that reads as a hang.
+    /// A scan must not inherit the flash sequence's 30 s response timeout.
     #[tokio::test]
     async fn identifying_waits_far_less_than_flashing() {
         let path = fixture("read_ecu_simos18.can");
@@ -609,10 +576,8 @@ mod tests {
         );
     }
 
-    /// `shares_one_session` has to agree with what `can_serve` would have said
-    /// about an opened session, because it replaced exactly that check. If the
-    /// two drift apart the scan either loses the shared-session optimisation or
-    /// starts opening a device it throws away again.
+    /// `shares_one_session` must agree with what `can_serve` would have said
+    /// about an opened session, since it replaced exactly that check.
     #[tokio::test]
     async fn sharing_one_session_predicts_what_can_serve_would_answer() {
         let path = fixture("read_ecu_simos18.can");
@@ -633,10 +598,9 @@ mod tests {
         session.close().await;
     }
 
-    /// The native ISO 15765 path must never be asked to open a speculative
-    /// session: its channel is bound to one ID pair, so the session would be
-    /// discarded, and `Drop` cannot await the J2534 teardown it starts — the
-    /// next `PassThruOpen` would race a device that is still closing.
+    /// The native ISO 15765 path must never open a speculative session: its
+    /// channel is bound to one ID pair, and `Drop` cannot await the J2534
+    /// teardown it starts, so the next `PassThruOpen` would race it.
     #[test]
     fn a_hardware_isotp_interface_never_opens_a_shared_session() {
         assert!(!shares_one_session(&Interface::J2534 {

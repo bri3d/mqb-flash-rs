@@ -38,8 +38,7 @@ pub const CAN_ID_RESPONSE: u32 = 0x011;
 /// The fixed filler that stands in for an absent random in variant C.
 ///
 /// It renders as ASCII "casc" in a decompiler, but it is not a string — the
-/// bytes are built from `mov` immediates and no such sequence exists in the
-/// binary.
+/// bytes are built from `mov` immediates.
 pub const FILLER: [u8; 4] = [0x63, 0x61, 0x73, 0x63];
 
 /// The three hard-coded 4-byte master keys, selected by `idxLab`.
@@ -340,19 +339,18 @@ pub struct MasterEvent {
 ///
 /// # Resolving `idxLab` without being told
 ///
-/// `idxLab` selects the master key but is not in the NVRAM record, so a dump
-/// alone cannot say which of the three applies. Two mechanisms narrow it:
+/// `idxLab` selects the master key but is not in the NVRAM record. Two
+/// mechanisms narrow it:
 ///
-/// * The ECU's status byte says whether the `CrcMaster` we just sent was
-///   accepted, so a rejected candidate can be dropped and the next tried. Three
-///   candidates converge within three exchanges.
+/// * The ECU's status byte says whether the `CrcMaster` we sent was accepted,
+///   so a rejected candidate is dropped and the next tried; three candidates
+///   converge within three exchanges.
 /// * In variant A round 2 and in variant B the ECU transmits `CrcSlave[0..2]`
-///   **unmasked**, so a master holding `noKeySecu` and `idxTun` can compute the
-///   same value under each candidate and keep whichever matches — and recover
+///   unmasked, so a master holding `noKeySecu` and `idxTun` can compute the same
+///   value under each candidate and keep whichever matches — recovering
 ///   `noKeySlave` from the masked half as a by-product.
 ///
-/// Against a live ECU none of that is needed: read `idxLab` from DID `0x2ED`
-/// and pass the key outright.
+/// Against a live ECU none of this is needed: read `idxLab` from DID `0x2ED`.
 pub struct ImmoMaster {
     no_key_secu: [u8; 16],
     no_key_mst: [u8; 2],
@@ -433,8 +431,7 @@ impl ImmoMaster {
     }
 
     /// `noKeySlave`, recovered from an ECU reply. Not needed to authenticate —
-    /// it only protects the ECU→master direction, which an emulated master
-    /// accepts unconditionally — but it proves the whole crypto chain.
+    /// it only protects the ECU→master direction — but it proves the crypto chain.
     pub fn no_key_slave(&self) -> Option<[u8; 2]> {
         self.no_key_slave
     }
@@ -483,15 +480,12 @@ impl ImmoMaster {
         });
     }
 
-    /// A new master random, guaranteed to differ from the previous one.
+    /// A new master random, guaranteed to differ from the previous one: variant
+    /// A round 2 and variant C reject an equal pair as a replay.
     ///
-    /// Variant A round 2 and variant C compare the two buffered master randoms
-    /// and reject the exchange if they are equal — replay protection that an
-    /// unlucky repeat would trip.
-    ///
-    /// `status_bit` forces the low bit of the last byte, which variant C needs:
-    /// there byte 7 is both the last random byte and the master status word,
-    /// and `bAuthVld` tests bit 0 of it.
+    /// `status_bit` forces the low bit of the last byte, which variant C needs —
+    /// there byte 7 is both the last random byte and the master status word, and
+    /// `bAuthVld` tests bit 0 of it.
     fn fresh_random(&mut self, status_bit: bool) -> [u8; 4] {
         let mut r = self.rng.next_random();
         if status_bit {
@@ -606,10 +600,10 @@ impl ImmoMaster {
         self.exchanges += 1;
 
         match (variant, round) {
-            // Round 1: the ECU published its random. Our reply carries ours and
-            // the response computed over both. Byte 7 is the last random byte,
-            // not a status word — variant A is the one path where bAuthVld does
-            // not test RX[7] & 1.
+            // Round 1: the ECU published its random; our reply carries ours and
+            // the response over both. Byte 7 is the last random byte, not a
+            // status word — variant A is the one path where bAuthVld does not
+            // test RX[7] & 1.
             (Variant::A, 1) => {
                 let rs = take4(&frame[1..5]);
                 self.rnd_slave = Some(rs);
@@ -628,9 +622,8 @@ impl ImmoMaster {
             }
 
             // Round 2: the ECU is proving itself, and byte 7 is its verdict on
-            // the reply we just sent. Bytes 1..3 hold a real CrcSlave only once
-            // it has released; otherwise they are fresh randoms and must not be
-            // matched against one.
+            // our last reply. Bytes 1..3 hold a real CrcSlave only once it has
+            // released; otherwise they are fresh randoms.
             (Variant::A, _) => {
                 self.note_status(frame[7]);
                 if let (Some(rs), Some(rm)) = (self.rnd_slave, self.rnd_master) {
@@ -681,9 +674,9 @@ impl ImmoMaster {
                 ])
             }
 
-            // Pipelined: byte 7 judges the reply we sent last time and bytes
-            // 1..5 answer that same exchange, while our reply carries the next
-            // random in bytes 4..8 — where byte 7 doubles as the status word.
+            // Pipelined: byte 7 judges the previous reply and bytes 1..5 answer
+            // that same exchange, while our reply carries the next random in
+            // bytes 4..8, where byte 7 doubles as the status word.
             (Variant::C, _) => {
                 self.note_status(frame[7]);
                 if let Some(rm) = self.rnd_master {
@@ -796,9 +789,8 @@ mod tests {
         assert_eq!(classify(&[0x01, 1, 2, 3, 4, 9, 9, 0]), (Variant::B, 1));
     }
 
-    /// A variant A reply must satisfy the ECU's own verification, which is
-    /// re-implemented here from the firmware rather than reusing our own
-    /// helper's output.
+    /// A variant A reply must satisfy the ECU's own verification, re-implemented
+    /// here from the firmware rather than reusing our helper's output.
     #[test]
     fn variant_a_reply_satisfies_the_ecus_check() {
         let s = secrets();

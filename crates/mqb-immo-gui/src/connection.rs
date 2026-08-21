@@ -9,13 +9,12 @@
 //!
 //! # Why one task and not one task per job
 //!
-//! Immobilizer work needs two things happening at once on the same bus: UDS
-//! reads of the status DIDs, and — when the tool is on the powertrain bus —
-//! answering the ECU's authentication requests on CAN `0x010` within its retry
-//! window. [`Session`] supports that because the underlying adapter broadcasts
-//! received frames, so an ISO-TP reader and a raw-frame reader can coexist. But
-//! they have to be driven from one place, or the raw stream stalls while a UDS
-//! read is in flight. That is what the select loops below are for.
+//! Immobilizer work needs two things at once on the same bus: UDS reads of the
+//! status DIDs, and — on the powertrain bus — answering the ECU's
+//! authentication requests on CAN `0x010` within its retry window. [`Session`]
+//! allows that because the adapter broadcasts received frames, but both have to
+//! be driven from one place or the raw stream stalls while a UDS read is in
+//! flight. Hence the select loops below.
 //!
 //! Master emulation is only possible on an interface that exposes raw CAN. A
 //! tester behind the vehicle gateway, or on a hardware ISO 15765 channel, sees
@@ -61,11 +60,9 @@ pub enum Command {
 
 /// How the master key is decided.
 ///
-/// `idxLab` selects it and is not in the immobilizer record, so a dump alone
-/// cannot say which of the three applies. These are the three ways round that,
-/// and they are genuinely different: reading DID `0x2ED` settles it in one
-/// request, whereas narrowing costs up to three failed exchanges — but works
-/// against an ECU that will not answer UDS at all.
+/// `idxLab` selects it and is not in the immobilizer record. Reading DID
+/// `0x2ED` settles it in one request; narrowing costs up to three failed
+/// exchanges but works against an ECU that will not answer UDS at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MasterKeySelection {
     /// Read `idxLab` from DID `0x2ED` and derive the key.
@@ -264,10 +261,9 @@ async fn connected(
 /// The master-emulation mode: the same loop, plus the raw `0x010` stream.
 ///
 /// The stream is created here rather than once per connection because it
-/// borrows the adapter, and recreating it each time master emulation starts
-/// keeps that borrow from outliving a disconnect. Frames the adapter itself
-/// sent are filtered out — the loopback echo would otherwise be answered as if
-/// the ECU had asked twice.
+/// borrows the adapter, so recreating it keeps that borrow from outliving a
+/// disconnect. Frames the adapter itself sent are filtered out — the loopback
+/// echo would otherwise be answered as if the ECU had asked twice.
 async fn master_loop(
     session: &Session,
     commands: &mut mpsc::UnboundedReceiver<Command>,

@@ -106,11 +106,9 @@ impl ImmoChannelSurvey {
 
     /// True when every readable copy holds the same identity.
     ///
-    /// Only `datDat` is compared. The three channels are separate FEE records
+    /// Only `datDat` is compared: the three channels are separate FEE records
     /// of slightly different lengths, so their trailing padding legitimately
-    /// differs — on a real ECU channel 7 carries two padding bytes where 6 and
-    /// 8 carry four. Comparing the whole payload would report a disagreement
-    /// that is not one.
+    /// differs and comparing whole payloads would report a false disagreement.
     pub fn copies_agree(&self) -> bool {
         let mut valid = self.records.iter().filter_map(|(_, r)| r.as_ref());
         let Some(first) = valid.next() else {

@@ -107,8 +107,9 @@ impl Step {
             }
             Step::Operation => {
                 "A calibration flash writes only the tune. A full flash rewrites the \
-                 application software as well. Both rewrite the calibration area, so both \
-                 are checked against the immobilizer."
+                 application software as well, and a relock does the same without patching \
+                 the bootloader. All of them rewrite the calibration area, so all are \
+                 checked against the immobilizer."
             }
             Step::Firmware => "Choose the file to write. It is inspected before anything is sent.",
             Step::Preflight => {
@@ -127,8 +128,11 @@ impl Step {
 /// Which flash the user asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Operation {
-    /// Every block in the file.
+    /// Every block in the file, with the CBOOT sample-mode patch applied.
     FullFlash,
+    /// Every block in the file, with CBOOT written exactly as the file has it
+    /// — which puts the ECU back to validating signatures.
+    Relock,
     /// The calibration block only.
     CalibrationFlash,
     /// Write the unlock patch.
@@ -139,6 +143,7 @@ impl Operation {
     fn label(self) -> &'static str {
         match self {
             Operation::FullFlash => "Full flash",
+            Operation::Relock => "Relock",
             Operation::CalibrationFlash => "Calibration flash",
             Operation::Unlock => "Unlock",
         }
@@ -621,10 +626,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             match inspect_firmware(&path, flash_info) {
                 Ok(info) => match validate_unlock_file(flash_info, &info) {
                     Ok(()) => {
-                        // Deliberately not set as `firmware_path`: that field
-                        // tracks the file the user chose on the Firmware step,
-                        // and keeping them apart is what lets the wizard tell
-                        // an unlock file from a flash file.
+                        // Deliberately not `firmware_path`: that field tracks
+                        // the file chosen on the Firmware step, and keeping
+                        // them apart is what distinguishes an unlock file.
                         state.unlock_file = Some(path);
                         state.firmware = Some(info);
                     }
@@ -801,12 +805,10 @@ fn start_scan(state: &mut State) -> Task<Message> {
     state.chosen_channel = None;
 
     // A stream rather than a future: the sweep spends up to `IDENT_TIMEOUT` on
-    // every channel that has nothing behind it, which on a bench is two of the
-    // three. Reporting each channel as it is tried keeps that visible instead
-    // of leaving one static label up for the whole sweep.
-    //
-    // One connection for the whole sweep where the interface allows it —
-    // opening a J2534 device per channel is seconds of dead time each.
+    // every silent channel, which on a bench is two of the three, so reporting
+    // each channel as it is tried keeps that visible. One connection for the
+    // whole sweep where the interface allows it — opening a J2534 device per
+    // channel is seconds of dead time each.
     Task::stream(iced::stream::channel(
         16,
         move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
@@ -858,14 +860,9 @@ fn start_preflight(state: &mut State) -> Task<Message> {
     state.busy = Some("Preparing…".into());
     state.risk_acknowledged = false;
 
-    // The immobilizer check applies to any operation that rewrites the
-    // CALIBRATION block, not just a full flash: ImoDat's power-class allow-list
-    // (`strVarTun`, the table the anti-tuning interlock tests idxTun against)
-    // lives in the calibration area. A calibration-only flash can therefore
-    // trip the interlock and leave the ECU unable to start, exactly as a full
-    // flash can. Unlock also rewrites CAL, so it counts too.
-    //
-    // The research itself covers Simos only, hence the `ImmoSupport` token.
+    // The immobilizer check applies to any operation that rewrites CALIBRATION,
+    // not just a full flash — see `immo_check_applies`. The research covers
+    // Simos only, hence the `ImmoSupport` token.
     let writes_cal = immo_check_applies(flash_info, &firmware, operation);
     let want_immo = writes_cal && ImmoSupport::for_module(flash_info).is_some();
 
@@ -912,17 +909,13 @@ fn start_preflight(state: &mut State) -> Task<Message> {
 
 /// Whether the immobilizer pre-flight is relevant to this operation.
 ///
-/// Two things have to be true.
-///
-/// **The calibration block is written.** The power-class allow-list
-/// (`strVarTun`) that the anti-tuning interlock tests `idxTun` against lives in
-/// the calibration area — so a calibration-only flash can trip the interlock
-/// just as a full flash can. This is why the check is not gated on "full flash".
-///
-/// **The ECU will then run the application software.** `CheckTuning` lives in
-/// ImoDat's periodic task in the ASW. An unlock writes CAL but leaves the ECU
-/// in the bootloader without fully booting the application, so the interlock
-/// never runs and there is nothing for this check to predict.
+/// Two things have to be true. **The calibration block is written**: the
+/// power-class allow-list (`strVarTun`) that the anti-tuning interlock tests
+/// `idxTun` against lives in the calibration area, so a calibration-only flash
+/// can trip the interlock just as a full flash can. **The ECU will then run the
+/// application software**: `CheckTuning` lives in ImoDat's periodic ASW task, so
+/// an unlock — which writes CAL but leaves the ECU in the bootloader — never
+/// runs the interlock and has nothing to predict.
 fn immo_check_applies(
     flash_info: &FlashInfo,
     firmware: &FirmwareInfo,
@@ -949,10 +942,21 @@ fn prepare_blocks(
     let mut raw = firmware.blocks.clone();
 
     // A full flash of a Simos ECU applies the CBOOT sample-mode patch, which is
-    // what makes the ECU accept modified software.
-    let patch_cboot = operation == Operation::FullFlash
-        && flash_info.block_to_number("CBOOT").is_some()
-        && raw.contains_key(&flash_info.block_to_number("CBOOT").unwrap());
+    // what makes the ECU accept modified software. A relock is the same flash
+    // with that patch left off, putting the signature-checking bootloader back.
+    let cboot = flash_info
+        .block_to_number("CBOOT")
+        .filter(|n| raw.contains_key(n));
+    if operation == Operation::Relock && cboot.is_none() {
+        return (
+            Err(
+                "This file does not contain a bootloader block, so it cannot relock the ECU."
+                    .into(),
+            ),
+            Vec::new(),
+        );
+    }
+    let patch_cboot = operation == Operation::FullFlash && cboot.is_some();
 
     let report = match mqb_flash_uds::checksum_and_patch_blocks(flash_info, &mut raw, patch_cboot) {
         Ok(r) => r,
@@ -974,7 +978,7 @@ fn prepare_blocks(
             };
             blocks.push(prepare_block(flash_info, cal, bytes));
         }
-        Operation::FullFlash => {
+        Operation::FullFlash | Operation::Relock => {
             let mut nums: Vec<u8> = raw.keys().copied().filter(|n| *n <= 5).collect();
             nums.sort_unstable();
             for n in nums {
@@ -1573,6 +1577,9 @@ fn view_operation(state: &State) -> Element<'_, Message> {
         state.unlock.as_ref().map(|u| &u.state),
         Some(UnlockState::Locked)
     );
+    let has_cboot = state
+        .flash_info()
+        .is_some_and(|fi| fi.block_to_number("CBOOT").is_some());
 
     if locked && state.unlock_file.is_some() {
         col = col.push(
@@ -1626,13 +1633,39 @@ fn view_operation(state: &State) -> Element<'_, Message> {
     col = col.push(
         container(
             text(
-                "Rewrites the bootloader, application software and tune. Use this to change \
-                 software version or recover an ECU.",
+                "Rewrites the bootloader, application software and tune, and patches the \
+                 bootloader into sample mode so the ECU keeps accepting modified software. \
+                 Use this to change software version or recover an ECU.",
             )
             .size(12),
         )
         .padding(iced::Padding::new(0.0).bottom(6).left(26)),
     );
+
+    // Relocking only means anything on a module whose bootloader we would
+    // otherwise patch.
+    if has_cboot {
+        col = col.push(
+            radio(
+                "Relock",
+                Operation::Relock,
+                state.operation,
+                Message::OperationChosen,
+            )
+            .size(15),
+        );
+        col = col.push(
+            container(
+                text(
+                    "The same full flash, but the bootloader is written exactly as the file \
+                     has it — no sample-mode patch. The ECU goes back to rejecting modified \
+                     software, so use a complete, unmodified factory file.",
+                )
+                .size(12),
+            )
+            .padding(iced::Padding::new(0.0).bottom(6).left(26)),
+        );
+    }
 
     if definitely_locked {
         col = col.push(callout(
@@ -1788,6 +1821,17 @@ fn view_confirm(state: &State) -> Element<'_, Message> {
         col = col.push(text(format!("Blocks written:  {}", names.join(", "))).size(15));
         let total: usize = blocks.iter().map(|b| b.block_encrypted_bytes.len()).sum();
         col = col.push(text(format!("Total payload:   {} KB", total / 1024)).size(15));
+    }
+
+    if state.operation == Some(Operation::Relock) {
+        col = col.push(Space::new().height(10));
+        col = col.push(callout(
+            "This will relock the ECU",
+            "The bootloader is written unpatched, so after this flash the ECU validates \
+             signatures again and will refuse modified software. If the application software \
+             or tune in this file is not the original signed factory content, the ECU will \
+             not run until a stock file is flashed back.",
+        ));
     }
 
     col = col.push(Space::new().height(10));

@@ -19,39 +19,25 @@
 //!
 //! ## Multi-frame messages
 //!
-//! Both tester TX and ECU RX messages may be longer than 7 bytes.
-//! The adapter performs ISO-TP reassembly on incoming tester CAN frames,
-//! matching the completed UDS PDU against the next T-line.  Outgoing
-//! R-line UDS PDUs are automatically fragmented into ISO-TP CAN frames
-//! (First Frame + Consecutive Frames) before being placed in the receive
-//! queue.
+//! Incoming tester frames are reassembled and the completed PDU matched against
+//! the next T-line; outgoing R-line PDUs are fragmented into ISO-TP frames
+//! before being queued.
 //!
 //! ## TransferData (SID 0x36)
 //!
-//! Any complete incoming `0x36` (TransferData) message automatically
-//! elicits a `76 <counter>` positive response **without** a fixture
-//! entry.  This avoids embedding large flash data blobs in fixtures.
+//! Any complete incoming `0x36` automatically elicits `76 <counter>` with no
+//! fixture entry, so fixtures need not embed large flash blobs.
 //!
 //! ## Ordered vs. interactive mode
 //!
-//! By default the adapter runs in **ordered** mode: the fixture is a
-//! script, and each incoming UDS PDU must match the next pending T-line in
-//! sequence.  This is exactly what a deterministic flash sequence needs.
+//! By default the fixture is a **script**: each incoming UDS PDU must match the
+//! next pending T-line in sequence, which is what a deterministic flash needs.
 //!
-//! A fixture whose comment header contains the directive
-//!
-//! ```text
-//! # mode: interactive
-//! ```
-//!
-//! is instead loaded in **interactive** mode.  Here the T/R pairs become a
-//! request-keyed lookup table: any incoming request is answered with its
-//! mapped R-lines regardless of order, so a GUI can be clicked through
-//! non-deterministically.  Requests with no fixture entry are answered by
-//! generic per-service synthetic handlers (session control, tester
-//! present, clear-DTC, write, IO-control, routine start/stop, security
-//! access), falling back to NRC `0x31` (requestOutOfRange) for anything
-//! still unknown.
+//! A fixture whose comment header carries `# mode: interactive` is loaded
+//! instead as a request-keyed lookup table, so any request is answered
+//! regardless of order and a GUI can be clicked through non-deterministically.
+//! Requests with no entry get generic per-service synthetic responses, falling
+//! back to NRC `0x31` (requestOutOfRange).
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
@@ -216,15 +202,13 @@ fn build_response_map(entries: Vec<FixtureEntry>) -> HashMap<Vec<u8>, Vec<Vec<u8
     map
 }
 
-/// Synthesize a generic positive (or negative) response for a request that
-/// has no explicit fixture entry — used only in interactive mode.
+/// Synthesize a response for a request with no explicit fixture entry — used
+/// only in interactive mode.
 ///
-/// These cover the services whose response is a fixed echo of the request
-/// (so a generator need not enumerate every possible payload): session
-/// control, tester present, clear-DTC, write, IO-control, and routine
-/// start/stop.  SecurityAccess is also handled — requestSeed returns a
-/// fixed seed and sendKey is always accepted.  Everything else gets NRC
-/// `0x31` (requestOutOfRange).
+/// Covers the services whose response is a fixed echo of the request, so a
+/// generator need not enumerate every payload: session control, tester present,
+/// clear-DTC, write, IO-control, routine start/stop, and SecurityAccess.
+/// Everything else gets NRC `0x31` (requestOutOfRange).
 fn synth_uds_response(uds: &[u8]) -> Vec<u8> {
     let sid = uds.first().copied().unwrap_or(0);
     match sid {
@@ -251,14 +235,12 @@ fn synth_uds_response(uds: &[u8]) -> Vec<u8> {
             r
         }
         // RoutineControl Start/Stop/RequestResults → echo subfunction + RID.
-        // (A RequestResults poll with a real status payload is normally
-        // supplied as an explicit fixture entry; this is the fallback.)
+        // A RequestResults poll with a real status payload comes from an
+        // explicit fixture entry; this is the fallback.
         0x31 if uds.len() >= 4 => vec![0x71, uds[1], uds[2], uds[3]],
-        // SecurityAccess.  A requestSeed (odd subfunction) returns a fixed
-        // non-zero 4-byte seed; a sendKey (even subfunction) is always
-        // accepted.  The fake adapter can't validate a real key, so any
-        // login the tester computes succeeds — enough to click through the
-        // login path offline.
+        // SecurityAccess: requestSeed (odd subfunction) returns a fixed non-zero
+        // 4-byte seed; sendKey (even) is always accepted, since the fake adapter
+        // cannot validate a real key.
         0x27 if uds.len() >= 2 => {
             let sub = uds[1];
             if sub % 2 == 1 {

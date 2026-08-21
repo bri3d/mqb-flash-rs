@@ -1,40 +1,32 @@
 //! Detecting whether a Simos ECU is already unlocked.
+//! Detecting whether a Simos ECU is already unlocked.
 //!
-//! "Unlocked" here means the Customer Bootloader (CBOOT) has been patched into
-//! sample mode — the patch [`mqb_cboot::patch_cboot`] applies, which forces
-//! `is_sample_mode()` to return true and so bypasses RSA signature validation.
+//! "Unlocked" means the Customer Bootloader (CBOOT) has been patched into
+//! sample mode by [`mqb_cboot::patch_cboot`], forcing `is_sample_mode()` true
+//! and bypassing RSA signature validation.
 //!
 //! # How the detection works
 //!
-//! A patched CBOOT reports an **`X`-prefixed hardware version** on DID `0xF1A3`
+//! A patched CBOOT reports an `X`-prefixed hardware version on DID `0xF1A3`
 //! (`VW ECU Hardware Version Number`) — typically `H13` becomes `X13`.
 //!
-//! The read is only meaningful **inside CBOOT**, because the application
-//! software is not patched and always reports the stock value. So the probe has
-//! to enter a programming session first; reading `0xF1A3` in the extended
-//! session just asks the ASW, which answers `H13` whether or not the ECU is
-//! unlocked.
-//!
-//! This is confirmed by a captured session (`full_flash_log/filtered.txt`): the
-//! sweeps answered by the ASW return `62 f1 a3 48 31 33` (`"H13"`) *and* answer
-//! `0xF197` / `0xF1AD` normally, while the sweeps answered by CBOOT return
-//! `62 f1 a3 58 31 33` (`"X13"`) and reject `0xF197` / `0xF1AD` with NRC `0x31`
-//! — CBOOT implements far fewer DIDs than the ASW.
-//!
-//! # Why not the SwitchPatch probe
+//! The read is only meaningful *inside CBOOT*: the application software is not
+//! patched and always reports the stock value, so the probe must enter a
+//! programming session first. A capture (`full_flash_log/filtered.txt`) shows
+//! the ASW answering `62 f1 a3 48 31 33` (`"H13"`) and serving `0xF197` /
+//! `0xF1AD` normally, while CBOOT answers `62 f1 a3 58 31 33` (`"X13"`) and
+//! rejects those two with NRC `0x31`.
 //!
 //! An earlier design classified the ECU by whether it accepted `3E 10 02`
-//! (SwitchPatch). That is not valid for this tool: we do not apply SwitchPatch,
-//! so its behaviour says nothing about whether *our* unlock is present. It is
-//! also structurally unreliable — the fallback only runs when the normal
-//! session request already failed, and a failure has many innocent causes.
+//! (SwitchPatch). That says nothing about whether *our* unlock is present — we
+//! never apply SwitchPatch — and the fallback only runs when the normal session
+//! request already failed, which has many innocent causes.
 //!
-//! # Side effect — the caller must handle this
+//! # Side effect
 //!
-//! [`probe_unlock_state`] leaves the ECU **sitting in CBOOT**. The engine will
-//! not run and normal diagnostics are unavailable until the ECU is reset. A
-//! caller that is not going straight on to flash must call
-//! [`leave_bootloader`].
+//! [`probe_unlock_state`] leaves the ECU sitting in CBOOT: the engine will not
+//! run and normal diagnostics are unavailable until it is reset. A caller not
+//! going straight on to flash must call [`leave_bootloader`].
 
 use automotive::uds::{RoutineControlType, UDSClient};
 use automotive::TransportLayer;
@@ -61,8 +53,8 @@ pub enum UnlockState {
     Locked,
     /// The probe could not reach a conclusion. Carries a human-readable reason.
     ///
-    /// This is deliberately distinct from [`UnlockState::Locked`]: the wizard
-    /// must not tell a user their unlocked ECU is locked because a read failed.
+    /// Distinct from [`UnlockState::Locked`]: a failed read must never be
+    /// reported to the user as a locked ECU.
     Unknown(String),
 }
 
@@ -97,9 +89,8 @@ pub fn classify_hardware_version(raw: &[u8]) -> UnlockState {
     match raw.first() {
         None => UnlockState::Unknown("ECU returned an empty hardware version".into()),
         Some(&UNLOCKED_PREFIX) => UnlockState::Unlocked,
-        // Any other *plausible* revision string means a stock bootloader. We
-        // do not require it to be exactly "H13": revisions vary across hardware
-        // and only the X prefix is the patch marker.
+        // Any other plausible revision string means a stock bootloader.
+        // Revisions vary across hardware; only the X prefix is the marker.
         Some(&c) if c.is_ascii_alphanumeric() => UnlockState::Locked,
         Some(&c) => UnlockState::Unknown(format!(
             "hardware version starts with a non-printable byte 0x{c:02X} \
@@ -218,8 +209,7 @@ mod tests {
         dq250mqb::DQ250_FLASH_INFO, haldex4motion::HALDEX_FLASH_INFO, simos18::S18_FLASH_INFO,
     };
 
-    /// The exact bytes captured from hardware, both states.
-    /// `full_flash_log/filtered.txt`: `62 f1 a3 48 31 33` and `62 f1 a3 58 31 33`.
+    /// Bytes captured from hardware in both states (`full_flash_log/filtered.txt`).
     #[test]
     fn classifies_the_real_captured_values() {
         assert_eq!(classify_hardware_version(b"H13"), UnlockState::Locked);
@@ -243,8 +233,7 @@ mod tests {
         }
     }
 
-    /// An unreadable answer must never be reported as Locked — telling a user
-    /// their unlocked ECU is locked would send them to re-flash the unlock.
+    /// An unreadable answer must never be reported as Locked.
     #[test]
     fn unreadable_answers_are_unknown_not_locked() {
         assert!(matches!(

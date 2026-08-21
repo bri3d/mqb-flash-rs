@@ -19,10 +19,10 @@
 //! [`ImmoRecord`] stores `datStat` and `datDat` verbatim and edits them in
 //! place rather than decoding to fields and re-encoding. Two bytes make that
 //! necessary: `datDat[0x2C]` packs `bLock` and `bLimModEna` into nibbles whose
-//! cleared encoding is not consistent across the firmware's own writers (a real
-//! ECU reads `0x05`, not the `0x50` the builder suggests), and `datDat[0x2E]` is
-//! unused with no documented value. Round-tripping the raw bytes means an edit
-//! to the VIN cannot silently rewrite a flag as a side effect.
+//! cleared encoding is inconsistent across the firmware's own writers (a real
+//! ECU reads `0x05`, not the `0x50` the builder suggests), and `datDat[0x2E]`
+//! is unused with no documented value. Round-tripping raw bytes means editing
+//! the VIN cannot silently rewrite a flag.
 
 use crate::crc::crc16_ccitt_false;
 

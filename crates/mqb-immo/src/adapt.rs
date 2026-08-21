@@ -1,28 +1,27 @@
 //! Moving an immobilizer identity onto an ECU over the wire.
+//! Moving an immobilizer identity onto an ECU over the wire.
 //!
 //! The download service ([`crate::diag`]) rewrites most of the immobilizer
-//! record — VIN, `noKeySecu`, `idxTun`, flags, `ctDatBasFazit` — but the record
-//! it carries has **no slot for `noKeyMst`**. Instead the flags leave the ECU in
-//! `stStatFct` 4, where `ImoComAuth` *learns* `noKeyMst` from whatever master
-//! answers it: the value implied by an accepted reply is latched on the first
-//! exchange and, if it repeats on the second, committed together with
-//! `stStatFct = 2`.
+//! record — VIN, `noKeySecu`, `idxTun`, flags, `ctDatBasFazit` — but has **no
+//! slot for `noKeyMst`**. Instead the flags leave the ECU in `stStatFct` 4,
+//! where `ImoComAuth` *learns* `noKeyMst` from whatever master answers it: the
+//! value implied by an accepted reply is latched on the first exchange and, if
+//! it repeats on the second, committed together with `stStatFct = 2`.
 //!
 //! So adapting ECU B into car A is two steps on one bus:
 //!
-//! 1. a **download** that transplants A's record into B, keyed with **B's
-//!    current** `noKeySecu`; and
+//! 1. a **download** transplanting A's record into B, keyed with B's *current*
+//!    `noKeySecu`; and
 //! 2. a **learn**, in which some master hands over A's `noKeyMst`.
 //!
-//! Step 2 is deliberately separate. A tester connected through the vehicle
-//! gateway cannot see CAN `0x010`/`0x011` and so cannot play the master at all —
-//! in that case the download is left to stand and the car's own cluster
-//! completes the learn on the next ignition cycle. [`crate::auth::ImmoMaster`]
-//! is only needed when the tool is on the powertrain bus directly.
+//! Step 2 is deliberately separate: a tester behind the vehicle gateway cannot
+//! see CAN `0x010`/`0x011` and so cannot play the master, and there the car's
+//! own cluster completes the learn on the next ignition cycle.
+//! [`crate::auth::ImmoMaster`] is only needed on the powertrain bus directly.
 //!
 //! What a download **cannot** move, because `node_fcn24` never writes it:
-//! `idxLab` (production data, and the selector for the master key),
-//! `noKeySlave` (a platform value), `bLock` and `bInhAcsMem`.
+//! `idxLab` (production data, and the master-key selector), `noKeySlave` (a
+//! platform value), `bLock` and `bInhAcsMem`.
 
 use crate::auth::master_key_for_idx_lab;
 use crate::diag::{
@@ -234,9 +233,8 @@ pub fn snapshot_key_proof(snapshot: &ImmoSnapshot, no_key_secu: &[u8; 16]) -> Op
 /// useless ECU.
 ///
 /// `target` is the dump believed to belong to the ECU on the bus. `same_ecu`
-/// says the record being written is the target's own (a PClass or VIN change),
-/// in which case the `idxLab` comparison — which is about the *donor car's*
-/// cluster — does not apply.
+/// says the record is the target's own (a PClass or VIN change), in which case
+/// the `idxLab` comparison — about the *donor car's* cluster — does not apply.
 pub fn adapt_preflight(
     plan: &DownloadPlan,
     snapshot: &ImmoSnapshot,
@@ -253,8 +251,8 @@ pub fn adapt_preflight(
 
     // ── The key must be the one the ECU actually holds ────────────────────
     //
-    // This is a read, so unlike a trial download it proves the key without
-    // risking the wrong-attempt lockout ladder.
+    // A read, so unlike a trial download it proves the key without risking the
+    // wrong-attempt lockout ladder.
     match snapshot_key_proof(snapshot, &target.no_key_secu) {
         None => out.push(PreflightItem::blocker(
             "DID 0x2F9 did not answer, so the dump's noKeySecu could not be checked against the \
@@ -309,9 +307,8 @@ pub fn adapt_preflight(
     // ── The anti-tuning interlock ─────────────────────────────────────────
     //
     // CheckTuning runs after every adopt and forces stStatFct to 'B' when
-    // idxTun is absent from the variant-coded allow-list, which would leave the
-    // ECU adapted but unable to authenticate. This one fails silently: the
-    // download is accepted and the car still will not start.
+    // idxTun is absent from the variant-coded allow-list. It fails silently:
+    // the download is accepted and the car still will not start.
     match ext {
         None => out.push(PreflightItem::blocker(
             "DID 0x2FF did not answer, so the power-class allow-list could not be checked. \
@@ -335,10 +332,9 @@ pub fn adapt_preflight(
 
     // ── Consequences worth knowing ────────────────────────────────────────
     //
-    // Bit 7 of the flags byte cannot be dropped, so *every* download leaves the
+    // Bit 7 of the flags byte cannot be dropped, so every download leaves the
     // ECU in adaptation mode. Until some master completes the learn the engine
-    // will not start — and a tester behind the vehicle gateway cannot play that
-    // master itself.
+    // will not start — and a tester behind the gateway cannot be that master.
     out.push(PreflightItem::warning(format!(
         "the download leaves the ECU in adaptation mode (stStatFct 4). It will not start until a \
          master teaches it noKeyMst {:04X} — either this tool on the powertrain bus, or the car's \
@@ -489,7 +485,7 @@ mod tests {
     /// DID 0x2FF, nineteen bytes.
     fn p2ff(idx_tun: u8, allow: [u8; 5], last_error: u8) -> Vec<u8> {
         let mut v = vec![0u8; 19];
-        v[0] = 0x53; // 'S' â€” a production ECU
+        v[0] = 0x53; // 'S' — a production ECU
         v[9] = idx_tun;
         v[10..15].copy_from_slice(&allow);
         v[15..18].copy_from_slice(&[0x08, 0x02, 0x00]);
@@ -537,7 +533,7 @@ mod tests {
             }
             if self.answers_2f9 {
                 // The ECU signs whatever it just reported, under the key it
-                // really holds â€” which is what makes this a proof of the key.
+                // really holds — which is what makes this a proof of the key.
                 let cks = identity_checksum(
                     &self.key,
                     &FAZIT,
@@ -569,8 +565,8 @@ mod tests {
 
     /// The transplant record must carry the donor's whole identity and be
     /// encrypted under the **target's** key. Getting that backwards is the one
-    /// mistake the ECU cannot report: the record just fails its CRC and the
-    /// attempt walks the lockout ladder.
+    /// mistake the ECU cannot report: the record fails its CRC and the attempt
+    /// walks the lockout ladder.
     #[test]
     fn adapt_plan_carries_the_donor_and_is_keyed_by_the_target() {
         let plan = adapt_plan(&target(), &donor(), None, None).unwrap();
@@ -613,7 +609,7 @@ mod tests {
     }
 
     /// A PClass change moves idxTun and nothing else, but still cannot drop the
-    /// adaptation bit â€” so it still costs a noKeyMst relearn.
+    /// adaptation bit — so it still costs a noKeyMst relearn.
     #[test]
     fn pclass_plan_changes_only_idx_tun() {
         let t = target();
@@ -642,7 +638,7 @@ mod tests {
         assert!(vin_plan(&target(), "TOO SHORT").is_err());
     }
 
-    /// A healthy ECU holding the target key clears every blocker â€” but always
+    /// A healthy ECU holding the target key clears every blocker — but always
     /// carries the adaptation-mode warning, because no download can avoid it.
     #[test]
     fn a_healthy_ecu_has_no_blockers() {
@@ -695,8 +691,8 @@ mod tests {
             .any(|m| m.contains("0x2F9 did not answer")));
     }
 
-    /// The anti-tuning interlock fails silently on the ECU â€” the download is
-    /// accepted and the car still will not start â€” so preflight has to catch
+    /// The anti-tuning interlock fails silently on the ECU — the download is
+    /// accepted and the car still will not start — so preflight has to catch
     /// every way it can trip.
     #[test]
     fn the_tuning_interlock_blocks_the_write() {

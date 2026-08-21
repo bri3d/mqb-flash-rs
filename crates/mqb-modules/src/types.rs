@@ -178,11 +178,10 @@ pub struct FlashInfo {
     pub dynamic_block_length_offsets: &'static [(u8, usize)],
 
     // ── Block-preparation policy ─────────────────────────────────────────────
-    // These six fields exist because every one of them differs between the
-    // Simos family and the transmission/AWD modules. Before they existed, all
-    // call sites hardcoded the Simos values, which put the wrong
-    // dataFormatIdentifier, the wrong padding and the wrong erase decision on
-    // the wire for DQ250, DQ381 and Haldex.
+    // Every one of these six differs between the Simos family and the
+    // transmission/AWD modules. Before they existed, call sites hardcoded the
+    // Simos values, putting the wrong dataFormatIdentifier, padding and erase
+    // decision on the wire for DQ250, DQ381 and Haldex.
     /// Compression nibble of the RequestDownload `dataFormatIdentifier`
     /// (high nibble of the byte; `0xA` = LZSS, `0x1` = DSG LZSS, `0x0` = none).
     pub compression_type: u8,

@@ -156,13 +156,11 @@ pub fn keystream_word(key: &[u8; 6], iv: &[u8; 4], serial: u16) -> [u8; 2] {
 ///
 /// The cipher is a pure XOR stream, so this is both the encryptor and the
 /// decryptor.
-///
-/// The keystream is produced a word at a time, so an odd-length payload has one
-/// byte left over. It is **copied through unchanged** rather than dropped: the
-/// reference Python implementation discards it, which loses a byte of the
-/// image, whereas passing it through makes `crypt(crypt(x)) == x` hold for every
-/// length — the property a dump rewriter depends on. In practice the leftover
-/// byte only ever lands in FEE padding, past every defined field.
+/// The keystream comes a word at a time, so an odd-length payload has a
+/// leftover byte. It is **copied through unchanged** rather than dropped (as
+/// the reference Python does), so `crypt(crypt(x)) == x` holds for every length
+/// — the property a dump rewriter depends on. In practice that byte only ever
+/// lands in FEE padding.
 pub fn crypt(data: &[u8], key: &[u8; 6], iv: &[u8; 4], serial: u16) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
     let mut s = serial;
@@ -193,11 +191,9 @@ mod tests {
         assert_eq!(derive_iv(&DEVICE_ID), [0xf0, 0x8c, 0x79, 0x25]);
     }
 
-    /// Known-answer test for the cipher itself: the keystream words the
-    /// reference implementation emits for the same key/IV at six serials. This
-    /// pins the recovered `f4a`/`f4b`/`f5c` tables and the whole state machine,
-    /// so a transcription slip anywhere shows up here rather than as a dump
-    /// that quietly decrypts to noise.
+    /// Known-answer test for the cipher itself, pinning the recovered
+    /// `f4a`/`f4b`/`f5c` tables and the whole state machine — a transcription
+    /// slip shows up here rather than as a dump that decrypts to noise.
     #[test]
     fn keystream_known_answers() {
         let key = derive_key(&DEVICE_ID);

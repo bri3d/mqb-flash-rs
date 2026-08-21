@@ -65,7 +65,7 @@ impl<'a> Sa2Vm<'a> {
 
             match op {
                 0x68 => {
-                    // for(count): push (count, ip_after_operand) onto stack
+                    // for
                     if ip >= script.len() {
                         break;
                     }
@@ -74,7 +74,7 @@ impl<'a> Sa2Vm<'a> {
                     loop_stack.push((count, ip));
                 }
                 0x49 => {
-                    // next: decrement top counter; if > 0, jump back to loop body
+                    // next
                     if let Some(top) = loop_stack.last_mut() {
                         top.0 -= 1;
                         if top.0 > 0 {
@@ -85,7 +85,7 @@ impl<'a> Sa2Vm<'a> {
                     }
                 }
                 0x4A => {
-                    // bcc offset: branch if carry clear
+                    // bcc
                     if ip >= script.len() {
                         break;
                     }
@@ -99,7 +99,7 @@ impl<'a> Sa2Vm<'a> {
                     }
                 }
                 0x6B => {
-                    // bra offset: unconditional branch
+                    // bra
                     if ip >= script.len() {
                         break;
                     }
@@ -111,17 +111,17 @@ impl<'a> Sa2Vm<'a> {
                     }
                 }
                 0x81 => {
-                    // rsl: circular left rotate — carry = old bit31, bit0 = old bit31
+                    // rsl
                     carry = (acc >> 31) != 0;
                     acc = acc.rotate_left(1);
                 }
                 0x82 => {
-                    // rsr: circular right rotate — carry = old bit0, bit31 = old bit0
+                    // rsr
                     carry = (acc & 1) != 0;
                     acc = acc.rotate_right(1);
                 }
                 0x84 => {
-                    // sub operand (4 bytes BE); carry set on borrow
+                    // sub
                     if ip + 4 > script.len() {
                         break;
                     }
@@ -132,7 +132,7 @@ impl<'a> Sa2Vm<'a> {
                     carry = borrowed;
                 }
                 0x87 => {
-                    // xor operand (4 bytes BE)
+                    // xor
                     if ip + 4 > script.len() {
                         break;
                     }
@@ -141,7 +141,7 @@ impl<'a> Sa2Vm<'a> {
                     acc ^= operand;
                 }
                 0x93 => {
-                    // add operand (4 bytes BE); carry set on overflow
+                    // add
                     if ip + 4 > script.len() {
                         break;
                     }
@@ -152,11 +152,11 @@ impl<'a> Sa2Vm<'a> {
                     carry = overflowed;
                 }
                 0x4C => {
-                    // finish: return accumulator
+                    // finish
                     return acc;
                 }
                 _ => {
-                    // Unknown opcode — abort execution
+                    // unknown opcode
                     break;
                 }
             }

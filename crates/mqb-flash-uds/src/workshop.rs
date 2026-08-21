@@ -17,32 +17,19 @@
 //! The point of the format is that a tool with nothing but ReadDataByIdentifier
 //! access can tell what was last flashed — no ASW patch or ReadMemory needed.
 //!
-//! A real code captured from hardware (`tests/simos18_full_flash.can`, the
-//! `2e f1 5a …` request) is `26 03 11 1e 20 20 20 20 76`:
-//!
-//! ```text
-//! 26  BCD year  -> 2026
-//! 03  BCD month -> March
-//! 11  BCD day   -> 11th          (capture date 2026-03-11)
-//! 1e  CRC8 of ASW1+ASW2+ASW3 as flashed
-//! 20  ┐
-//! 20  │ CAL[0x7A..0x7E] = "    " — this calibration carries four ASCII
-//! 20  │ spaces in the VW_Flash fingerprint field
-//! 20  ┘
-//! 76  CRC8 of the eight bytes above
-//! ```
+//! A real code captured from hardware (`tests/simos18_full_flash.can`) is
+//! `26 03 11 1e 20 20 20 20 76`: flashed 2026-03-11, ASW CRC `0x1e`, a CAL
+//! fingerprint of four ASCII spaces, trailing CRC `0x76`.
 //!
 //! The date is a parameter rather than "now": this crate has no clock
-//! dependency, and fixture-driven tests must reproduce a captured byte string
-//! exactly.
+//! dependency, and fixture-driven tests must reproduce captured bytes exactly.
 
-/// The historical hardcoded placeholder that both front ends used before the
-/// real computation existed.
+/// The historical hardcoded placeholder both front ends used before the real
+/// computation existed.
 ///
-/// It is Python's `FALLBACK` default, and Python's own validity check rejects
-/// it: its trailing byte is `0x3D` while the CRC8 of the first eight bytes is
-/// `0x58`. Because `bytes[3] == 0x42 && bytes[4] == 0x04` it is additionally
-/// classified as "old" — written by a legacy VW_Flash/SimosTools build.
+/// Python's `FALLBACK` default, which Python's own validity check rejects: its
+/// trailing byte is `0x3D` while the CRC8 of the first eight is `0x58`. Because
+/// `bytes[3] == 0x42 && bytes[4] == 0x04` it is also classified as "old".
 pub const FALLBACK_WORKSHOP_CODE: [u8; 9] = [0x20, 0x04, 0x20, 0x42, 0x04, 0x20, 0x42, 0xB1, 0x3D];
 
 /// Placeholder CAL ID used when no calibration block is available (DQ381
@@ -57,12 +44,10 @@ pub const CAL_ID_UNKNOWN: [u8; 4] = *b"UNKN";
 const SIMOS_FINGERPRINT_RANGE: core::ops::Range<usize> = 0x7A..0x7E;
 
 /// CRC8 used throughout the workshop code (CRC-8/SMBUS: polynomial `0x07`,
-/// initial value `0`, no reflection, no final XOR).
+/// init `0`, no reflection, no final XOR).
 ///
-/// Python ships this as a 256-entry lookup table applied as
-/// `sum = table[sum ^ byte]`; that table is exactly the byte-wise expansion of
-/// the bit loop below, so the two agree for every input. Computing it keeps the
-/// table out of the source, and the ASW blocks are only a couple of megabytes.
+/// Python ships a 256-entry table, which is exactly the byte-wise expansion of
+/// this bit loop; computing it keeps the table out of the source.
 pub fn crc8_hash(data: &[u8]) -> u8 {
     crc8_continue(0, data)
 }
@@ -128,14 +113,10 @@ impl FlashDate {
     /// Decodes the three leading BCD bytes, or `None` if they are not a
     /// plausible date.
     ///
-    /// Two-digit years are widened to 20xx. (Python's `convert_from_bcd` feeds
-    /// the raw two-digit value straight into `datetime.date`, yielding year 26
-    /// rather than 2026; that only affects its human-readable string, and the
-    /// re-encoded bytes are identical either way.)
-    ///
-    /// Unlike Python — which relies on `datetime.date` raising — this does not
-    /// reject a day that is out of range for its particular month, only one
-    /// outside 1-31.
+    /// Two-digit years are widened to 20xx; Python leaves them as year 26,
+    /// which affects only its human-readable string. Unlike Python — which
+    /// relies on `datetime.date` raising — a day out of range for its
+    /// particular month is accepted, only one outside 1-31 is rejected.
     pub fn from_bcd_bytes(bytes: [u8; 3]) -> Option<Self> {
         let year = from_bcd(bytes[0])?;
         let month = from_bcd(bytes[1])?;
@@ -150,9 +131,8 @@ impl FlashDate {
 /// A decoded or freshly built VW workshop code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkshopCode {
-    /// Flash date. `None` only when decoding bytes whose date field is not
-    /// valid BCD — Python substitutes `date.today()` there, which this crate
-    /// deliberately cannot do (no clock dependency).
+    /// Flash date. `None` only when the decoded date field was not valid BCD —
+    /// Python substitutes `date.today()`; this crate has no clock.
     pub flash_date: Option<FlashDate>,
     /// CRC8 over the concatenated ASW blocks that were flashed.
     pub asw_checksum: u8,
@@ -181,11 +161,9 @@ impl WorkshopCode {
     /// Builds the Simos flavour: CRC8 over the ASW blocks in flash order, and a
     /// CAL ID lifted from `CAL[0x7A..0x7E]`.
     ///
-    /// `asw_blocks` must be given in the same order Python appends them (the
-    /// caller's block iteration order — ASW1, ASW2, ASW3), because the CRC is
-    /// over the concatenation. A CAL too short to contain the fingerprint field
-    /// falls back to [`CAL_ID_NONE`], matching Python's initial value for the
-    /// case where no CAL is being flashed at all.
+    /// `asw_blocks` must be in flash order (ASW1, ASW2, ASW3) because the CRC is
+    /// over the concatenation. A CAL too short to hold the fingerprint field
+    /// falls back to [`CAL_ID_NONE`], as Python does when no CAL is flashed.
     pub fn for_simos(asw_blocks: &[&[u8]], cal: &[u8], flash_date: FlashDate) -> Self {
         let mut crc: u8 = 0;
         for block in asw_blocks {
@@ -236,9 +214,8 @@ impl WorkshopCode {
 
     /// Serialises to the nine bytes written to DID `0xF15A`.
     ///
-    /// A `None` date encodes as `00 00 00`; that can only arise from
-    /// [`WorkshopCode::from_bytes`] on a code whose date field was not BCD, as
-    /// every constructor here sets a date.
+    /// A `None` date encodes as `00 00 00`, which can only arise from
+    /// [`WorkshopCode::from_bytes`] on a non-BCD date field.
     pub fn as_bytes(&self) -> [u8; 9] {
         let date = self
             .flash_date
@@ -409,8 +386,7 @@ mod tests {
 
     #[test]
     fn undecodable_date_still_serialises() {
-        // Placeholder's date field 0x20 0x04 0x20 -> day 20 is fine, month 04 is
-        // fine, year 20 is fine, so use a genuinely bad one.
+        // The placeholder's own date field decodes fine, so use a bad one.
         let code = WorkshopCode::from_bytes(&[0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0]);
         assert!(code.flash_date.is_none());
         assert_eq!(code.as_bytes()[0..3], [0x00, 0x00, 0x00]);

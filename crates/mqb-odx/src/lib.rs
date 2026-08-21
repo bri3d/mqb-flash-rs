@@ -107,19 +107,16 @@ fn extract_odx_with(
             crypto.decrypt(&raw_bytes)
         };
 
-        // Get decompressed size
         let decompressed_size = size_map
             .get(&data_id)
             .copied()
             .ok_or_else(|| OdxError::MissingSize(data_id.clone()))?;
 
-        // Decompress
-        // Order matters: the module-level LZSS10 override must be tested before
-        // the '1' arm. DQ250 is the only module that sets it, and a DSG ODX
-        // carrying ENCRYPT-COMPRESS-METHOD "11" would otherwise be fed to the
-        // Simos8 legacy decompressor — which either yields garbage blocks or
-        // panics on the length assertion. Python tests `is_dsg` first for the
-        // same reason (extractodx.py:114-119).
+        // The module-level LZSS10 override must be tested before the '1' arm.
+        // DQ250 is the only module that sets it, and a DSG ODX carrying
+        // ENCRYPT-COMPRESS-METHOD "11" would otherwise reach the Simos8 legacy
+        // decompressor. Python tests `is_dsg` first for the same reason
+        // (extractodx.py:114-119).
         let decompressed = match compression_type {
             'A' | 'a' => decompress_lzss10(&decrypted, decompressed_size),
             _ if lzss10_odx => decompress_lzss10(&decrypted, decompressed_size),

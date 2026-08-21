@@ -240,9 +240,9 @@ pub enum WriteError {
     )]
     UnknownAlignment { channel: u8 },
 
-    /// Split records interleave a block-management byte that the reference
-    /// implementation has never been exercised against on an *encrypted*
-    /// channel, so writing one is a guess.
+    /// Split records interleave a block-management byte, and the reference
+    /// implementation has never been exercised against one on an *encrypted*
+    /// channel, so writing one would be a guess.
     #[error(
         "channel {channel}'s record straddles an FEE block boundary; rewriting a split \
          record is not supported"
@@ -587,18 +587,14 @@ fn find_generation(headers: &[PageHeader], live: &[&Record]) -> Option<Generatio
 
 /// Recover the generation counter from the record CRCs alone.
 ///
-/// The counter appears only in the CRCed trailer, never in the record body, so
-/// every candidate has to be tried. The one that validates the most records
-/// wins — over a real image that is unambiguous, because a wrong candidate
-/// would have to collide on every channel at once.
-///
-/// A single record cannot pin the counter: with 65 536 candidates and a 16-bit
-/// CRC, roughly one wrong value also fits. `None` is returned rather than a
-/// coin-flip.
+/// The counter appears only in the CRCed trailer, so every candidate has to be
+/// tried; the one validating the most records wins, which over a real image is
+/// unambiguous because a wrong candidate would have to collide on every channel
+/// at once. A single record cannot pin it — with 65 536 candidates against a
+/// 16-bit CRC, roughly one wrong value also fits — so `None` beats a coin-flip.
 pub fn brute_force_generation(records: &[&Record]) -> Option<u32> {
-    // Any one record may be damaged — a torn write, or a channel whose framing
-    // this model does not cover — so try a handful of starting points rather
-    // than letting the first record decide whether the image is readable.
+    // Any one record may be damaged — a torn write, or an uncovered framing —
+    // so try a handful of starting points rather than letting the first decide.
     records
         .iter()
         .take(8)
@@ -608,8 +604,8 @@ pub fn brute_force_generation(records: &[&Record]) -> Option<u32> {
 fn brute_force_from_probe(probe: &Record, records: &[&Record]) -> Option<u32> {
     let slot = probe.data.len();
 
-    // The CRC is computed left to right, so the state after the record's data
-    // can be computed once per framing and only the 8-byte trailer re-run per
+    // The CRC runs left to right, so the state after the record's data is
+    // computed once per framing and only the 8-byte trailer is re-run per
     // candidate. Without this the search is a few billion byte-operations.
     let mut prefixes: Vec<u16> = Vec::with_capacity(16);
     for n in (slot.saturating_sub(7)..=slot).rev() {
@@ -719,11 +715,10 @@ pub fn recover_inner_crc(payload: &[u8]) -> Option<usize> {
 
 /// Did Hitag2 turn this ciphertext into something that looks like plaintext?
 ///
-/// Channels with an inner CRC prove themselves; this heuristic only has to
-/// carry the `record_way 0` channels, where nothing in the record is
-/// self-validating. Plaintext there is mostly structured data with runs of
-/// zeroes, and the immobilizer channels additionally start with `bAuthPreVld`,
-/// which is always `0xAA` or `0x55`.
+/// Channels with an inner CRC prove themselves; this heuristic only carries the
+/// `record_way 0` channels, where nothing is self-validating. Plaintext there is
+/// structured data with runs of zeroes, and the immobilizer channels start with
+/// `bAuthPreVld`, always `0xAA` or `0x55`.
 fn looks_decrypted(raw: &[u8], decrypted: &[u8]) -> bool {
     if decrypted.len() < 8 {
         return false;
@@ -813,11 +808,9 @@ mod tests {
     /// A synthetic image holding the record under test plus a couple of filler
     /// channels.
     ///
-    /// The filler is not decoration: the generation counter lives only in the
-    /// CRCed trailer, so one record's CRC cannot pin it — with 65 536
-    /// candidates against a 16-bit CRC, a wrong value fits about as often as
-    /// the right one. Several channels agreeing is what makes it unambiguous,
-    /// which is also why it works on a real dump with 84 live channels.
+    /// The filler is not decoration: with 65 536 candidates against a 16-bit
+    /// CRC, one record cannot pin the generation counter. Several channels
+    /// agreeing is what makes it unambiguous.
     fn synthetic(channel: u8, payload: &[u8], generation: u32) -> Vec<u8> {
         let mut image = vec![0u8; 64]; // leading slack, so offsets are not zero
         image.extend_from_slice(&frame(channel, payload, generation));
@@ -851,9 +844,8 @@ mod tests {
         assert!(dump.analyze(rec, None).outer_ok());
     }
 
-    /// One record is one CRC's worth of evidence, which is not enough to pin a
-    /// 16-bit counter. Guessing here would silently mis-frame every record in
-    /// the image, so it has to come back empty-handed instead.
+    /// One record is one CRC's worth of evidence, not enough to pin a 16-bit
+    /// counter. Guessing would silently mis-frame every record in the image.
     #[test]
     fn a_single_record_cannot_pin_the_counter() {
         let payload: Vec<u8> = (0..24u8).collect();
@@ -946,8 +938,7 @@ mod tests {
         let mut image = synthetic(9, &payload, 0x057D);
         // Corrupt the payload but leave the CRC fields alone, so the record is
         // still discoverable yet no longer validates. The filler channels keep
-        // the generation counter recoverable, so this really does exercise the
-        // per-record framing check rather than a missing counter.
+        // the counter recoverable, so this exercises the per-record check.
         image[64] ^= 0xFF;
         let mut dump = Dump::parse(image);
         assert_eq!(dump.generation().map(|g| g.value), Some(0x057D));

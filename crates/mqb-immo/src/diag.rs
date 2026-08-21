@@ -115,11 +115,10 @@ pub enum DiagError {
 
 /// Build the 48-byte record the download service decrypts.
 ///
-/// Note the ECU also recognises a "virgin" form — VIN all `0xFF`, `[0x21] == 0`,
+/// The ECU also recognises a "virgin" form — VIN all `0xFF`, `[0x21] == 0`,
 /// `[0x22] == 0xFF`, `[0x23] == 0xFF` — which *resets* the immobilizer data set
-/// instead of adopting the record. That is reachable through this function, so
-/// callers building an adaptation must pass a real VIN and set
-/// [`DOWNLOAD_FLAG_ADAPTATION`].
+/// instead of adopting the record. It is reachable through this function, so an
+/// adaptation must pass a real VIN and set [`DOWNLOAD_FLAG_ADAPTATION`].
 pub fn download_plaintext(
     vin: &str,
     new_key: &[u8; 16],
@@ -150,7 +149,7 @@ pub fn download_plaintext(
 ///
 /// `no_key_secu` is the key the ECU holds **now**, not the one being written.
 /// Getting that backwards is the one mistake the ECU cannot tell you about: the
-/// record simply fails its CRC and the attempt walks the lockout ladder.
+/// record fails its CRC and the attempt walks the lockout ladder.
 pub fn download_value(
     no_key_secu: &[u8; 16],
     plaintext: &[u8; DOWNLOAD_PLAINTEXT_LEN],
@@ -193,18 +192,17 @@ pub fn download_flag_names(flags: u8) -> Vec<&'static str> {
 
 /// Recompute the 5-byte DID `0x2F9` payload.
 ///
-/// This is the only *read* with cryptographic value: the ECU signs the identity
-/// data it just reported, together with the live challenge, under its current
-/// `noKeySecu`. Recomputing it locally proves both that a dump's key is the
-/// right one and that the dump belongs to the ECU actually on the bus — and it
-/// writes nothing, so unlike a trial login or download it cannot arm the
-/// wrong-attempt lockout ladder.
+/// The only *read* with cryptographic value: the ECU signs the identity data it
+/// just reported, together with the live challenge, under its current
+/// `noKeySecu`. Recomputing it locally proves both that a dump's key is right
+/// and that the dump belongs to the ECU on the bus — and it writes nothing, so
+/// unlike a trial login it cannot arm the wrong-attempt lockout ladder.
 ///
 /// The ECU refuses this DID (error `0x20`) unless services 1, 3, 4 and 9 have
-/// already run in the session, which is why the read order matters.
+/// run in the session, which is why the read order matters.
 ///
-/// `fazit` is the DID `0xF17C` payload, `vin` DID `0xF190`, `adapt_status` DID
-/// `0x2ED`, `live_state` DID `0x2EE`, and `challenge` DID `0x2E0`.
+/// `fazit` is DID `0xF17C`, `vin` `0xF190`, `adapt_status` `0x2ED`,
+/// `live_state` `0x2EE`, `challenge` `0x2E0`.
 pub fn identity_checksum(
     no_key_secu: &[u8; 16],
     fazit: &[u8],
@@ -368,8 +366,7 @@ mod tests {
 
     /// The ECU compares the four trailing CRC bytes against its own
     /// little-endian CRC32 buffer *in reverse*, which is what makes them
-    /// big-endian on the wire. Mirror that check here rather than trusting our
-    /// own byte order.
+    /// big-endian on the wire. Mirrored here rather than trusting our own order.
     #[test]
     fn download_value_shape_and_crc_order() {
         let p = plan();
@@ -458,8 +455,7 @@ mod tests {
     }
 
     /// The key proof must accept the right key, reject a wrong one, and ignore
-    /// the leading tag byte — which is `0x82` or `0x84` by which engine ran the
-    /// cipher and says nothing about the key.
+    /// the leading tag byte, which says nothing about the key.
     #[test]
     fn key_proof_accepts_only_the_right_key() {
         let fazit = [b'F'; FAZIT_LEN];

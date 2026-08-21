@@ -857,9 +857,9 @@ fn build_plan(state: &mut State) {
         }
     };
 
-    // The preflight needs a live reading. Without one the plan is still shown —
-    // it is just a set of bytes — but nothing is checked, and that is said
-    // plainly rather than left to look like a pass.
+    // The preflight needs a live reading. Without one the plan is still shown,
+    // but nothing is checked — and that is said plainly rather than left to
+    // look like a pass.
     match state.live.as_ref() {
         Some(live) => {
             let donor_idx_lab = if state.donor_idx_lab_input.trim().is_empty() {
@@ -941,7 +941,7 @@ fn save_dflash(state: &mut State, path: PathBuf) {
 
     // All three copies hold the same identity and the firmware votes between
     // them, so writing one and leaving the others would produce a dump the ECU
-    // itself would disagree with.
+    // itself disagrees with.
     let mut edited = dump;
     let mut written = Vec::new();
     for channel in mqb_nvcrypt::IMMO_CHANNELS {
@@ -1066,9 +1066,8 @@ mod tests {
 
     /// A different ECU for a transplant to come from.
     ///
-    /// Derived from the reference record rather than written out by hand, so
-    /// its CRCs are real — `ImmoRecord::encode` recomputes them, which is
-    /// exactly the property the dump editor depends on.
+    /// Derived from the reference record rather than hand-written, so its CRCs
+    /// are real — `ImmoRecord::encode` recomputes them.
     fn donor_hex() -> String {
         let mut record = ImmoRecord::decode(&decode_hex(RECORD_HEX)).expect("reference decodes");
         record.set_no_key_secu([

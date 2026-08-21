@@ -1,39 +1,31 @@
 //! Immobilizer state: decoding the status DIDs, and the pre-flight rules.
+//! Immobilizer state: decoding the status DIDs, and the pre-flight rules.
 //!
-//! If the ECU is already in — or is left in — a non-starting immobilizer state,
-//! the car will crank but not run, and for several of those states there is no
-//! diagnostic way back. This module turns the raw immobilizer status DIDs into
-//! decoded fields and, on top of those, into findings a tool can show the user.
-//!
-//! Nothing here talks to an ECU: it takes bytes and produces meaning. Reading
-//! the DIDs over UDS is `mqb_flash_uds::immo::read_immo_snapshot`.
+//! If the ECU is left in a non-starting immobilizer state the car will crank
+//! but not run, and for several of those states there is no diagnostic way
+//! back. This module turns the raw status DIDs into decoded fields and, on top
+//! of those, into findings a tool can show the user. Nothing here talks to an
+//! ECU; reading the DIDs is `mqb_flash_uds::immo::read_immo_snapshot`.
 //!
 //! **When it applies.** Not just a full flash. The power-class allow-list
-//! `strVarTun` — the table `CheckTuning` tests `idxTun` against — lives in the
-//! **calibration area**, so writing CAL alone is enough to trip the anti-tuning
-//! interlock and leave the ECU unable to start. Any operation that writes CAL
-//! and then lets the ECU boot the application software is in scope.
+//! `strVarTun` that `CheckTuning` tests `idxTun` against lives in the
+//! calibration area, so writing CAL alone can trip the anti-tuning interlock.
+//! Any operation that writes CAL and then lets the ECU boot the application
+//! software is in scope. Unlock is the exception: it writes CAL, but the ASW
+//! never fully boots afterwards, so `CheckTuning` never evaluates.
 //!
-//! The unlock operation is the exception: it writes CAL, but the ECU never
-//! fully boots the application software afterwards, and `CheckTuning` runs from
-//! ImoDat's periodic task in the ASW — so the interlock never evaluates and
-//! there is nothing to predict.
+//! **Policy.** The wizard warns and asks for explicit confirmation; it never
+//! hard-refuses, so there is deliberately no `Severity::Block`. An ECU that
+//! will not answer the status DIDs fails *open*: [`Severity::Unknown`] ("could
+//! not be verified"), never a risk.
 //!
-//! **Policy.** The wizard *warns* and asks for explicit confirmation; it never
-//! hard-refuses. There is deliberately no `Severity::Block`. If the ECU will not
-//! answer the status DIDs at all the check *fails open*: that is reported as
-//! [`Severity::Unknown`] ("could not be verified"), never as a risk.
+//! **Scope.** Every rule comes from reverse-engineering done on Simos18 alone,
+//! so an [`ImmoSnapshot`] can only be built from an [`ImmoSupport`] token, which
+//! [`ImmoSupport::for_module`] hands out for Simos18 only.
 //!
-//! **Scope.** Every rule here comes from reverse-engineering work done on
-//! Simos18 and only Simos18. There is no equivalent research for DQ250, DQ381,
-//! Haldex, or the other Simos variants, so an [`ImmoSnapshot`] can only be
-//! constructed by first obtaining an [`ImmoSupport`] token, which
-//! [`ImmoSupport::for_module`] hands out for Simos18 alone. Every other module
-//! is structurally incapable of producing a report.
-//!
-//! All reads are `ReadDataByIdentifier` on the module's normal channel
-//! (tester `0x7E0` / ECU `0x7E8`) in the *default* session, with no
-//! SecurityAccess and no immobilizer login.
+//! All reads are `ReadDataByIdentifier` on the module's normal channel (tester
+//! `0x7E0` / ECU `0x7E8`) in the *default* session, with no SecurityAccess and
+//! no immobilizer login.
 
 use std::collections::HashMap;
 
@@ -53,13 +45,12 @@ pub const IMMO_DIDS: [u16; 7] = [0x2E0, 0x2ED, 0x2EE, 0x2EF, 0x2FF, 0xF190, 0xF1
 /// the ECU answer it.
 ///
 /// Imo service 7 (DID `0x2F9`) refuses with error `0x20` unless services 1, 3,
-/// 4 and 9 have already run in this session — that is DIDs `0x2E0`, `0x2ED`,
-/// `0x2EE` and `0xF190`, which is why they come first and why this order is not
-/// interchangeable with [`IMMO_DIDS`].
+/// 4 and 9 have run in this session — DIDs `0x2E0`, `0x2ED`, `0x2EE`, `0xF190`
+/// — which is why they come first.
 ///
-/// Use this when the identity checksum is wanted (it is the only way to prove a
-/// dump's `noKeySecu` belongs to the ECU on the bus without writing anything).
-/// The flash wizard's pre-flight does not need it and uses [`IMMO_DIDS`].
+/// Use this when the identity checksum is wanted: it is the only way to prove a
+/// dump's `noKeySecu` belongs to the ECU on the bus without writing anything.
+/// The flash pre-flight does not need it and uses [`IMMO_DIDS`].
 pub const IMMO_DIDS_FULL: [u16; 8] = [
     DID_CHALLENGE,
     DID_STATE,
@@ -107,10 +98,10 @@ pub struct ImmoSupport {
 impl ImmoSupport {
     /// Returns `Some` only for Simos18 (project prefix `SC8`).
     ///
-    /// Simos 12.2 / 16 / 18.1 / 18.10 / 18.4 are *not* included: the DID layout
-    /// and the tuning-interlock behaviour were only ever verified on Simos18,
-    /// and a wrong decode here would produce a confident, wrong verdict about
-    /// whether a car will start.
+    /// Simos 12.2 / 16 / 18.1 / 18.10 / 18.4 are excluded: the DID layout and
+    /// tuning-interlock behaviour were only verified on Simos18, and a wrong
+    /// decode would produce a confident, wrong verdict about whether a car
+    /// will start.
     pub fn for_module(flash_info: &FlashInfo) -> Option<Self> {
         if flash_info.project_name == "SC8" {
             Some(Self { _private: () })
@@ -587,9 +578,9 @@ pub enum TuningStatus {
 /// R2 — the tuning interlock, the only proven silent immobilizer brick.
 ///
 /// `idxTun` is byte 4 of every authentication plaintext block. Once the ECU
-/// decides the tuning check failed it forces `stStatFct` to `0x42` `'B'`, and
-/// from then on it can never produce a `CrcMaster`/`CrcSlave` the cluster will
-/// accept. Recovery needs the `noKeySecu` key, which only exists in a DFlash dump.
+/// decides the tuning check failed it forces `stStatFct` to `0x42` `'B'` and can
+/// never again produce a `CrcMaster`/`CrcSlave` the cluster accepts. Recovery
+/// needs the `noKeySecu` key, which only exists in a DFlash dump.
 pub fn tuning_status(ext: &ExtendedDid) -> TuningStatus {
     if ext.str_var_tun.iter().all(|&b| b == 0) {
         TuningStatus::AllowListEmpty
@@ -776,11 +767,9 @@ pub fn assess(snapshot: &ImmoSnapshot) -> ImmoReport {
     // R5 — what a reported 2 really means.
     let resolved = match (state.as_ref(), bits.as_ref()) {
         (Some(st), Some(b)) => resolve_state(st, b, tuning),
-        // Without 0x2EE a reported 2 is genuinely ambiguous — the ECU forces
-        // 3, 4 and 'B' to report as 2, and only 0x2EE tells them apart. Do NOT
-        // fall back to `from_raw`, which would resolve it to Adapted and make
-        // the report claim "adapted and healthy" on the strength of a bit that
-        // was never read. Other raw values are unambiguous and pass through.
+        // Without 0x2EE a reported 2 is genuinely ambiguous. Do NOT fall back
+        // to `from_raw`, which would resolve it to Adapted and claim "adapted
+        // and healthy" on the strength of a bit that was never read.
         (Some(st), None) if st.st_stat_fct == 2 => None,
         (Some(st), None) => Some(ImmoState::from_raw(st.st_stat_fct)),
         _ => None,
@@ -829,9 +818,8 @@ pub fn assess(snapshot: &ImmoSnapshot) -> ImmoReport {
         }
     }
 
-    // R6 — current lock / release status. Ignition-off and no-master-reply are
-    // Unknown rather than Warn: both are the normal reading on a bench harness
-    // and say nothing about whether the ECU is bricked.
+    // R6 — lock / release status. Ignition-off and no-master-reply are Unknown
+    // rather than Warn: both are normal on a bench harness.
     if let Some(b) = bits.as_ref() {
         let (severity, message, detail) = match lock_status(b) {
             LockStatus::MasterVerified => (
@@ -911,7 +899,7 @@ pub fn assess(snapshot: &ImmoSnapshot) -> ImmoReport {
         }
     }
 
-    // R8 — last error code. Unknown, not Warn: there is no decode table, so we
+    // R8 — last error code. Unknown, not Warn: no decode table exists, so we
     // can report the number but not what it means.
     if let Some(e) = ext.as_ref() {
         if e.last_error != 0 {
@@ -1015,10 +1003,8 @@ pub fn diff_after_flash(before: &ImmoSnapshot, after: &ImmoSnapshot) -> Vec<Immo
                     .to_string(),
             ));
         }
-        // Only report this as caused by the flash if the membership actually
-        // held beforehand. An ECU that already failed the interlock before we
-        // touched it must not have a pre-existing condition attributed to us —
-        // `assess` reports that case as R2 on the "before" snapshot.
+        // Only blame the flash if the membership held beforehand — `assess`
+        // reports a pre-existing failure as R2 on the "before" snapshot.
         if b.str_var_tun.contains(&b.idx_tun) && !a.str_var_tun.contains(&a.idx_tun) {
             findings.push(ImmoFinding::new(
                 ImmoRule::PostFlashChange,
@@ -1130,9 +1116,8 @@ mod tests {
         v
     }
 
-    /// A reported state of 2 is ambiguous by design — the ECU forces 3, 4 and
-    /// 'B' to report as 2, and only DID 0x2EE tells them apart. Without 0x2EE
-    /// the report must not claim the ECU is adapted and healthy.
+    /// A reported state of 2 is ambiguous by design; without DID 0x2EE the
+    /// report must not claim the ECU is adapted and healthy.
     #[test]
     fn state_2_without_0x2ee_is_not_reported_as_healthy() {
         let snap = snapshot(&[
