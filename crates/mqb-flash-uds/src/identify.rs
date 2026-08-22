@@ -79,6 +79,185 @@ pub const IDENT_DIDS: &[u16] = &[
     DID_BOOT_LOADER_IDENTIFICATION,
 ];
 
+// ── Informational records ────────────────────────────────────────────────────
+
+/// One record shown to the user on the identification page.
+///
+/// These play no part in ranking candidates — they exist so the wizard can show
+/// what the module says about itself before anything is written to it.
+#[derive(Debug, Clone, Copy)]
+pub struct InfoField {
+    /// The Data Identifier to read.
+    pub did: u16,
+    /// How the field is named to the user.
+    pub label: &'static str,
+    /// `true` when the record is an ASCII string; `false` renders as hex bytes.
+    ///
+    /// Mirrors `DataRecord::parse_type` in `mqb_modules`, kept here as a bool so
+    /// the display order and the labels live in one table.
+    pub text: bool,
+}
+
+/// The records the identification page displays, in display order.
+///
+/// A curated subset of [`mqb_modules::DATA_RECORDS`]: every entry is something a
+/// user inspecting their control module would recognise. Live values (vehicle
+/// speed, active session) and the undocumented records are left out — the point
+/// is identity, not a data-logger view.
+///
+/// Every one of these costs a request on a channel that already answered, so
+/// keep the table short enough that identification still feels immediate.
+pub const INFO_FIELDS: &[InfoField] = &[
+    InfoField {
+        did: 0xF190,
+        label: "VIN",
+        text: true,
+    },
+    InfoField {
+        did: DID_SPARE_PART_NUMBER,
+        label: "VW spare part number",
+        text: true,
+    },
+    InfoField {
+        did: 0xF189,
+        label: "Application software version",
+        text: true,
+    },
+    InfoField {
+        did: 0xF191,
+        label: "ECU hardware number",
+        text: true,
+    },
+    InfoField {
+        did: 0xF1A3,
+        label: "ECU hardware version",
+        text: true,
+    },
+    InfoField {
+        did: DID_SYSTEM_NAME,
+        label: "System name / engine type",
+        text: true,
+    },
+    InfoField {
+        did: 0xF1AD,
+        label: "Engine code letters",
+        text: true,
+    },
+    InfoField {
+        did: DID_BOOT_LOADER_IDENTIFICATION,
+        label: "Boot loader identification",
+        text: true,
+    },
+    InfoField {
+        did: DID_ODX_FILE_IDENTIFIER,
+        label: "ASAM/ODX file identifier",
+        text: true,
+    },
+    InfoField {
+        did: DID_ODX_FILE_VERSION,
+        label: "ASAM/ODX file version",
+        text: true,
+    },
+    InfoField {
+        did: 0xF804,
+        label: "Calibration ID",
+        text: true,
+    },
+    InfoField {
+        did: 0xF1AB,
+        label: "Logical software block version",
+        text: true,
+    },
+    InfoField {
+        did: 0xF18C,
+        label: "ECU serial number",
+        text: true,
+    },
+    InfoField {
+        did: 0xF17C,
+        label: "VW FAZIT identification string",
+        text: true,
+    },
+    InfoField {
+        did: 0xF17E,
+        label: "ECU production change number",
+        text: true,
+    },
+    InfoField {
+        did: 0xF1AA,
+        label: "VW workshop system name",
+        text: true,
+    },
+    InfoField {
+        did: 0x0600,
+        label: "Coding value",
+        text: false,
+    },
+    InfoField {
+        did: 0xF442,
+        label: "Control module voltage",
+        text: false,
+    },
+    InfoField {
+        did: 0x295B,
+        label: "Control module mileage",
+        text: false,
+    },
+    InfoField {
+        did: 0x0407,
+        label: "Programming attempts",
+        text: false,
+    },
+    InfoField {
+        did: 0x0408,
+        label: "Successful programming attempts",
+        text: false,
+    },
+    InfoField {
+        did: 0xF1F1,
+        label: "Tuning protection SO2",
+        text: false,
+    },
+];
+
+/// The [`INFO_FIELDS`] DIDs that [`IDENT_DIDS`] does not already read.
+///
+/// Identification reads its five records first and ranks the channel on those;
+/// this is the extra sweep, so nothing is requested twice.
+pub fn extra_info_dids() -> Vec<u16> {
+    INFO_FIELDS
+        .iter()
+        .map(|f| f.did)
+        .filter(|did| !IDENT_DIDS.contains(did))
+        .collect()
+}
+
+/// Render [`INFO_FIELDS`] against a raw DID map, skipping absent or empty
+/// records.
+///
+/// A refused DID is normal — modules differ in what they answer — so it is left
+/// out rather than shown as a blank row.
+pub fn info_values(dids: &HashMap<u16, Vec<u8>>) -> Vec<(&'static str, String)> {
+    INFO_FIELDS
+        .iter()
+        .filter_map(|field| {
+            let bytes = dids.get(&field.did)?;
+            let value = if field.text {
+                decode(Some(bytes))?
+            } else if bytes.is_empty() {
+                return None;
+            } else {
+                bytes
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            Some((field.label, value))
+        })
+        .collect()
+}
+
 // ── Channels ─────────────────────────────────────────────────────────────────
 
 /// What kind of controller a channel hosts, which selects the ranking rules.
@@ -659,7 +838,7 @@ pub async fn identify_on_channel<T: TransportLayer>(
         return None;
     }
 
-    let dids = read_dids(transport, IDENT_DIDS).await;
+    let mut dids = read_dids(transport, IDENT_DIDS).await;
     if dids.is_empty() {
         tracing::debug!(
             channel = channel.label,
@@ -667,6 +846,10 @@ pub async fn identify_on_channel<T: TransportLayer>(
         );
         return None;
     }
+
+    // Only a channel that already answered pays for the informational sweep, so
+    // the silent addresses in a scan cost nothing extra.
+    dids.extend(read_dids(transport, &extra_info_dids()).await);
 
     let candidates = candidates_from_dids(&dids, channel);
     tracing::info!(
@@ -700,6 +883,53 @@ mod tests {
         candidates.iter().map(|c| c.module_name).collect()
     }
 
+    // ── Informational records ───────────────────────────────────────────────
+
+    #[test]
+    fn extra_info_dids_never_repeats_an_identification_read() {
+        let extra = extra_info_dids();
+        for did in &extra {
+            assert!(!IDENT_DIDS.contains(did), "0x{did:04X} read twice");
+        }
+        // The overlap is real: the info table reuses the identification records.
+        assert!(extra.len() < INFO_FIELDS.len());
+    }
+
+    #[test]
+    fn info_fields_are_known_data_records() {
+        for field in INFO_FIELDS {
+            assert!(
+                mqb_modules::DATA_RECORDS
+                    .iter()
+                    .any(|r| r.address == field.did && (r.parse_type == 0) == field.text),
+                "0x{:04X} ({}) disagrees with DATA_RECORDS",
+                field.did,
+                field.label
+            );
+        }
+    }
+
+    #[test]
+    fn info_values_skips_refused_and_padding_only_records() {
+        let dids: HashMap<u16, Vec<u8>> = [
+            (0xF190u16, b"WVWZZZAUZJW000000".to_vec()),
+            (DID_SYSTEM_NAME, b"2.0l R4 TFSI \0".to_vec()),
+            (0xF1AD, b"   ".to_vec()),
+            (0xF442, vec![0x03, 0x2C]),
+            (0x0600, Vec::new()),
+        ]
+        .into_iter()
+        .collect();
+
+        let shown = info_values(&dids);
+        let labels: Vec<&str> = shown.iter().map(|(l, _)| *l).collect();
+        assert_eq!(
+            labels,
+            vec!["VIN", "System name / engine type", "Control module voltage"]
+        );
+        assert_eq!(shown[1].1, "2.0l R4 TFSI");
+        assert_eq!(shown[2].1, "03 2C");
+    }
     // ── Channel table ───────────────────────────────────────────────────────
 
     #[test]

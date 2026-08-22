@@ -20,7 +20,7 @@ pub use flash::{
 };
 pub use identify::{
     candidates_from_dids, identify_on_channel, Candidate, ChannelIdentification, ChannelKind,
-    Confidence, IdentChannel, IDENT_CHANNELS, IDENT_DIDS,
+    Confidence, IdentChannel, InfoField, IDENT_CHANNELS, IDENT_DIDS, INFO_FIELDS,
 };
 pub use immo::{
     assess as assess_immo, diff_after_flash, read_immo_snapshot, ImmoFinding, ImmoReport,

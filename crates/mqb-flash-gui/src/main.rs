@@ -108,8 +108,7 @@ impl Step {
             Step::Operation => {
                 "A calibration flash writes only the tune. A full flash rewrites the \
                  application software as well, and a relock does the same without patching \
-                 the bootloader. All of them rewrite the calibration area, so all are \
-                 checked against the immobilizer."
+                 the bootloader."
             }
             Step::Firmware => "Choose the file to write. It is inspected before anything is sent.",
             Step::Preflight => {
@@ -1504,10 +1503,41 @@ fn view_identify(state: &State) -> Element<'_, Message> {
             );
         }
 
+        group = group.push(view_module_info(ident));
+
         col = col.push(group);
     }
 
     col.into()
+}
+
+/// The identification records the module returned, as a label/value table.
+///
+/// Purely informational — nothing here selects a module — so it sits below the
+/// candidate radios. Records the module refused are simply absent; modules
+/// differ in what they answer, and a page of blank rows would read as a fault.
+fn view_module_info<'a>(ident: &'a ChannelIdentification) -> Element<'a, Message> {
+    let values = mqb_flash_uds::identify::info_values(&ident.dids);
+    if values.is_empty() {
+        return Space::new().into();
+    }
+
+    let mut table = column![text("Module information").size(14)].spacing(3);
+    for (label, value) in values {
+        table = table.push(
+            row![
+                text(label).size(12).width(230),
+                text(value).size(12).font(iced::Font::MONOSPACE),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Start),
+        );
+    }
+
+    container(table)
+        .padding(iced::Padding::new(0.0).top(4).bottom(6).left(26))
+        .width(Length::Fill)
+        .into()
 }
 
 fn view_unlock(state: &State) -> Element<'_, Message> {
@@ -1649,15 +1679,8 @@ fn view_operation(state: &State) -> Element<'_, Message> {
         .size(15),
     );
     col = col.push(
-        container(
-            text(
-                "Writes only the tune; the application software is untouched. Note this is \
-                 not immobilizer-safe: the allowed power classes live in the calibration \
-                 area, so a calibration flash can trip the anti-tuning interlock too.",
-            )
-            .size(12),
-        )
-        .padding(iced::Padding::new(0.0).bottom(6).left(26)),
+        container(text("Writes only the tune; the application software is untouched.").size(12))
+            .padding(iced::Padding::new(0.0).bottom(6).left(26)),
     );
 
     // A chosen unlock file means the pending operation is the unlock; a full
