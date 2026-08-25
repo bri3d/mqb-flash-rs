@@ -197,7 +197,10 @@ mod tests {
         };
         let message = err.to_string();
         assert!(message.contains("doip:169.254.1.2"), "{message}");
-        assert!(message.contains("immobilizer master emulation"), "{message}");
+        assert!(
+            message.contains("immobilizer master emulation"),
+            "{message}"
+        );
     }
 
     #[test]

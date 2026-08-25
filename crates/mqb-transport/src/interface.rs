@@ -115,10 +115,16 @@ fn parse_doip(rest: &str) -> Result<Interface, String> {
             if host.is_empty() {
                 return Err("doip interface must be 'doip:<host>[:<port>]'".to_owned());
             }
-            return Ok(Interface::DoIp { host: host.to_owned(), port });
+            return Ok(Interface::DoIp {
+                host: host.to_owned(),
+                port,
+            });
         }
     }
-    Ok(Interface::DoIp { host: rest.to_owned(), port: DOIP_PORT })
+    Ok(Interface::DoIp {
+        host: rest.to_owned(),
+        port: DOIP_PORT,
+    })
 }
 
 /// Parse the suffix after the `"j2534"` or `"j2534-isotp"` prefix.
@@ -187,7 +193,11 @@ mod tests {
 
     #[test]
     fn doip_round_trips() {
-        for s in ["doip:169.254.1.2", "doip:192.168.0.10:13401", "doip:gateway.local"] {
+        for s in [
+            "doip:169.254.1.2",
+            "doip:192.168.0.10:13401",
+            "doip:gateway.local",
+        ] {
             assert_eq!(parse(s).to_string(), s);
         }
     }
