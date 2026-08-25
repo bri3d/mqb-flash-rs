@@ -42,6 +42,16 @@ pub enum OpenError {
         needed_for: &'static str,
     },
 
+    /// This interface is not a CAN bus at all.
+    #[error(
+        "'{interface}' is an Ethernet (DoIP) transport, not a CAN bus: the entity routes UDS to a \
+         logical address and no raw frames exist. {needed_for} needs raw CAN."
+    )]
+    NotCan {
+        interface: String,
+        needed_for: &'static str,
+    },
+
     /// Support for this interface was not compiled in.
     #[error("{0}")]
     NotCompiledIn(String),
@@ -77,6 +87,10 @@ pub fn open_can_adapter(
             }
             open_j2534(dll.as_deref(), *bitrate)
         }
+        Interface::DoIp { .. } => Err(OpenError::NotCan {
+            interface: interface.to_string(),
+            needed_for,
+        }),
     }
 }
 
@@ -90,7 +104,7 @@ pub fn supports_raw_can(interface: &Interface) -> bool {
         Interface::J2534 {
             native_isotp: true,
             ..
-        }
+        } | Interface::DoIp { .. }
     )
 }
 
@@ -168,6 +182,22 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("j2534-isotp"), "{message}");
+    }
+
+    #[test]
+    fn doip_is_not_a_can_bus() {
+        let iface = Interface::DoIp {
+            host: "169.254.1.2".into(),
+            port: 13400,
+        };
+        assert!(!supports_raw_can(&iface));
+
+        let Err(err) = open_can_adapter(&iface, "immobilizer master emulation") else {
+            panic!("an Ethernet transport must not open as a raw CAN adapter");
+        };
+        let message = err.to_string();
+        assert!(message.contains("doip:169.254.1.2"), "{message}");
+        assert!(message.contains("immobilizer master emulation"), "{message}");
     }
 
     #[test]

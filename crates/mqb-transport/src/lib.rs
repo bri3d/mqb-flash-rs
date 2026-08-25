@@ -15,5 +15,5 @@ pub mod interface;
 pub mod open;
 
 pub use fake_adapter::FakeCanAdapter;
-pub use interface::Interface;
+pub use interface::{Interface, DOIP_PORT};
 pub use open::{open_can_adapter, supports_raw_can, OpenError};

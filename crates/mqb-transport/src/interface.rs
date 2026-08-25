@@ -30,7 +30,16 @@ pub enum Interface {
     /// Fixture-driven fake interface for testing.  Path must point to a `.can`
     /// fixture file.  Use `fake:<path>` on the command line.
     Fake(PathBuf),
+    /// DoIP (ISO 13400-2) entity over Ethernet, `doip:<host>[:<port>]`.
+    ///
+    /// Not a CAN interface: the entity routes UDS to a logical ECU address, so
+    /// there is no bus to see raw frames on.  `host` is usually the gateway's
+    /// link-local address, discovered over UDP.
+    DoIp { host: String, port: u16 },
 }
+
+/// Registered DoIP port (ISO 13400-2), TCP and UDP.
+pub const DOIP_PORT: u16 = 13400;
 
 impl std::fmt::Display for Interface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -55,6 +64,8 @@ impl std::fmt::Display for Interface {
                 }
             }
             Interface::Fake(p) => write!(f, "fake:{}", p.display()),
+            Interface::DoIp { host, port } if *port == DOIP_PORT => write!(f, "doip:{host}"),
+            Interface::DoIp { host, port } => write!(f, "doip:{host}:{port}"),
         }
     }
 }
@@ -69,6 +80,9 @@ impl std::str::FromStr for Interface {
         if let Some(path_str) = s.strip_prefix("fake:") {
             return Ok(Interface::Fake(PathBuf::from(path_str)));
         }
+        if let Some(rest) = s.strip_prefix("doip:") {
+            return parse_doip(rest);
+        }
         if let Some(rest) = s.strip_prefix("j2534-isotp") {
             return parse_j2534(rest, true);
         }
@@ -82,10 +96,29 @@ impl std::str::FromStr for Interface {
                  Use 'socketcan:<ifname>', 'panda', \
                  'j2534[:<dll>][:<bitrate>]' (software ISO-TP), \
                  'j2534-isotp[:<dll>][:<bitrate>]' (hardware ISO 15765), \
+                 'doip:<host>[:<port>]' (Ethernet), \
                  or 'fake:<fixture.can>'"
             )),
         }
     }
+}
+
+/// Parse the suffix after `"doip:"` — `<host>` or `<host>:<port>`.
+fn parse_doip(rest: &str) -> Result<Interface, String> {
+    if rest.is_empty() {
+        return Err("doip interface must be 'doip:<host>[:<port>]'".to_owned());
+    }
+    // Only a trailing numeric segment is a port; anything else is part of the
+    // host, so a bare IPv6 literal stays intact.
+    if let Some((host, maybe_port)) = rest.rsplit_once(':') {
+        if let Ok(port) = maybe_port.parse::<u16>() {
+            if host.is_empty() {
+                return Err("doip interface must be 'doip:<host>[:<port>]'".to_owned());
+            }
+            return Ok(Interface::DoIp { host: host.to_owned(), port });
+        }
+    }
+    Ok(Interface::DoIp { host: rest.to_owned(), port: DOIP_PORT })
 }
 
 /// Parse the suffix after the `"j2534"` or `"j2534-isotp"` prefix.
@@ -142,4 +175,45 @@ fn parse_j2534(rest: &str, native_isotp: bool) -> Result<Interface, String> {
         bitrate: 500_000,
         native_isotp,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(s: &str) -> Interface {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn doip_round_trips() {
+        for s in ["doip:169.254.1.2", "doip:192.168.0.10:13401", "doip:gateway.local"] {
+            assert_eq!(parse(s).to_string(), s);
+        }
+    }
+
+    #[test]
+    fn the_default_doip_port_is_implicit() {
+        let Interface::DoIp { host, port } = parse("doip:169.254.1.2") else {
+            panic!("doip: must parse as DoIp");
+        };
+        assert_eq!(host, "169.254.1.2");
+        assert_eq!(port, DOIP_PORT);
+    }
+
+    /// A bare IPv6 literal is all host: only a numeric tail is a port.
+    #[test]
+    fn an_ipv6_host_keeps_its_colons() {
+        let Interface::DoIp { host, port } = parse("doip:fe80::1%eth0") else {
+            panic!("an IPv6 host must parse as DoIp");
+        };
+        assert_eq!(host, "fe80::1%eth0");
+        assert_eq!(port, DOIP_PORT);
+    }
+
+    #[test]
+    fn doip_needs_a_host() {
+        assert!("doip:".parse::<Interface>().is_err());
+        assert!("doip::13400".parse::<Interface>().is_err());
+    }
 }
