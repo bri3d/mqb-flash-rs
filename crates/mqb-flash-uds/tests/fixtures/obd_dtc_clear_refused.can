@@ -1,0 +1,8 @@
+# OBD-II mode 04 refused with conditionsNotCorrect.
+#
+# The refusal an ECU gives when it will not clear emission DTCs — and the
+# reason the programming precondition (0x0203) is refused a few requests later.
+# IDs are informational: the fake adapter matches on the UDS payload.
+
+T 700 04
+R 7E8 7f 04 22

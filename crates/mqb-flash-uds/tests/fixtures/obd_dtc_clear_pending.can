@@ -1,0 +1,9 @@
+# OBD-II mode 04 answered with responsePending before the positive response.
+#
+# The ECU sends 7F 04 78 first, so a clear that consumed one response would
+# leave the 44 to leak into whatever runs next.
+# IDs are informational: the fake adapter matches on the UDS payload.
+
+T 700 04
+R 7E8 7f 04 78
+R 7E8 44
