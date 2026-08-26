@@ -227,6 +227,11 @@ fn spawn_progress_listener() -> (
                 ProgressUpdate::ClearingDtcs => {
                     status.set_message("Clearing DTCs…");
                 }
+                ProgressUpdate::DtcsCleared(outcome) => {
+                    if !outcome.is_cleared() {
+                        status.println(format!("Warning: {outcome}"));
+                    }
+                }
                 ProgressUpdate::Connecting => {
                     status.set_message("Opening extended diagnostic session…");
                 }

@@ -31,7 +31,7 @@ use mqb_sa2::Sa2Vm;
 
 use mqb_transport::Interface;
 
-use crate::session::Session;
+use crate::session::{clear_obd_dtcs, obd_clear_needs_own_device, Session};
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
@@ -67,6 +67,8 @@ impl From<automotive::Error> for FlashError {
 pub enum ProgressUpdate {
     /// Step 0: OBD-II DTC clear before programming.
     ClearingDtcs,
+    /// What that clear did, whether or not it worked.
+    DtcsCleared(DtcClearOutcome),
     /// Step 1: Opening extended diagnostic session.
     Connecting,
     /// VIN was read from the ECU.
@@ -210,9 +212,37 @@ pub async fn flash_blocks(
         "Starting flash sequence"
     );
 
+    // The DTC clear is step 0 of the process, not of the session: on the
+    // hardware ISO 15765 path it needs its own channel and the driver will not
+    // open the device while the flash channel holds it, so it runs before the
+    // session is opened and after it is closed.
+    let own_device = obd_clear_needs_own_device(&opts.interface);
+    send_progress(&opts, ProgressUpdate::ClearingDtcs);
+    if own_device {
+        let outcome = clear_obd_dtcs(&opts.interface).await;
+        send_progress(&opts, ProgressUpdate::DtcsCleared(outcome));
+    }
+
     let session = Session::open(&opts.interface, flash_info, opts.stmin_override)?;
+    if !own_device {
+        // Raw CAN: one adapter carries both ID pairs.
+        let outcome = session.clear_obd_dtcs().await;
+        send_progress(&opts, ProgressUpdate::DtcsCleared(outcome));
+    }
+
     let result = session.flash_blocks(flash_info, &blocks, &opts).await;
+
+    // Clear again after the reboot, under the same ordering rule.
+    if result.is_ok() && !own_device {
+        let outcome = session.clear_obd_dtcs().await;
+        send_progress(&opts, ProgressUpdate::DtcsCleared(outcome));
+    }
     session.close().await;
+    if result.is_ok() && own_device {
+        let outcome = clear_obd_dtcs(&opts.interface).await;
+        send_progress(&opts, ProgressUpdate::DtcsCleared(outcome));
+    }
+
     result
 }
 
@@ -285,12 +315,13 @@ pub(crate) async fn run_with_transport<T: TransportLayer>(
 /// but `UDSClient` would enforce a `0x7E` echo for a `0x3E` request and reject
 /// it as `InvalidServiceId`. Both `0x7E` and `0x50` are accepted here.
 pub(crate) async fn send_switchpatch<T: TransportLayer>(transport: &T) -> Result<(), FlashError> {
+    // Subscribe before sending — see `send_obd_dtc_clear`.
+    let mut stream = transport.recv();
     transport
         .send(&[0x3E, 0x10, 0x02])
         .await
         .map_err(FlashError::from)?;
 
-    let mut stream = transport.recv();
     let timeout = std::time::Duration::from_secs(5);
     loop {
         match tokio::time::timeout(timeout, stream.next()).await {
@@ -331,22 +362,73 @@ pub(crate) fn send_progress(opts: &FlashOptions, update: ProgressUpdate) {
 
 // ── OBD-II DTC clear ──────────────────────────────────────────────────────────
 
+/// The OBD-II tester address used for the emission DTC clear.
+pub(crate) const OBD_TESTER_ID: u32 = 0x700;
+/// The OBD-II ECU address used for the emission DTC clear.
+pub(crate) const OBD_ECU_ID: u32 = 0x7E8;
+
+/// What the OBD-II emission DTC clear did.
+///
+/// Best effort — a failure never aborts a flash — but never silent: an ECU
+/// refuses the programming precondition (`0x0203`) with conditionsNotCorrect
+/// while emission DTCs are stored, so a clear that did not happen is the usual
+/// cause of a flash that will not start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DtcClearOutcome {
+    /// The ECU answered `0x44`.
+    Cleared,
+    /// The ECU answered a negative response other than `0x78`.
+    Refused { nrc: u8 },
+    /// Something answered, but not to the service we asked about.
+    Unexpected(Vec<u8>),
+    /// Nothing answered before the timeout.
+    Silent,
+    /// The clear could not be sent at all — no channel, or the send failed.
+    Failed(String),
+}
+
+impl std::fmt::Display for DtcClearOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DtcClearOutcome::Cleared => write!(f, "emission DTCs cleared"),
+            DtcClearOutcome::Refused { nrc } => {
+                write!(f, "the ECU refused the DTC clear (NRC 0x{nrc:02X})")
+            }
+            DtcClearOutcome::Unexpected(resp) => {
+                write!(f, "unexpected answer to the DTC clear: {resp:02X?}")
+            }
+            DtcClearOutcome::Silent => write!(f, "no answer to the DTC clear"),
+            DtcClearOutcome::Failed(why) => write!(f, "could not send the DTC clear: {why}"),
+        }
+    }
+}
+
+impl DtcClearOutcome {
+    /// Whether the ECU confirmed the clear.
+    pub fn is_cleared(&self) -> bool {
+        matches!(self, DtcClearOutcome::Cleared)
+    }
+}
+
 /// Send OBD-II mode 04 (Clear Emission-Related DTCs) over the supplied transport.
 ///
-/// Sends `0x04` as an ISO-TP PDU and waits for `0x44`. NRC 0x78
-/// (responsePending) is consumed transparently, each one resetting the 5 s
-/// timeout. Errors and timeouts are logged and ignored — a failed DTC clear
-/// must not abort the flash sequence.
-pub(crate) async fn send_obd_dtc_clear<T: TransportLayer>(transport: &T) {
-    tracing::info!("Sending OBD-II mode 04 (Clear DTCs) [tester=0x700, ECU=0x7E8]");
-    if let Err(e) = transport.send(&[0x04]).await {
-        tracing::warn!("OBD DTC clear send failed: {e} (continuing)");
-        return;
-    }
+/// Sends `0x04` and waits for `0x44`. NRC 0x78 (responsePending) is consumed
+/// transparently, each one resetting the 5 s timeout: ECUs commonly send
+/// `7F 04 78` first, and consuming only one response would leak the `44` into
+/// whatever runs next.
+pub(crate) async fn send_obd_dtc_clear<T: TransportLayer>(transport: &T) -> DtcClearOutcome {
+    tracing::info!(
+        "Sending OBD-II mode 04 (Clear DTCs) [tester=0x{OBD_TESTER_ID:03X}, ECU=0x{OBD_ECU_ID:03X}]"
+    );
+    // Subscribe before sending: the receive stream is a broadcast subscription
+    // and does not replay, so a response that arrives before this point is lost.
     let mut stream = transport.recv();
+    if let Err(e) = transport.send(&[0x04]).await {
+        return DtcClearOutcome::Failed(e.to_string());
+    }
     let timeout = std::time::Duration::from_secs(5);
     loop {
-        match tokio::time::timeout(timeout, stream.next()).await {
+        let outcome = match tokio::time::timeout(timeout, stream.next()).await {
             Ok(Some(Ok(resp))) => {
                 // NRC 0x78 = responsePending: ECU is still processing, keep waiting.
                 if resp.len() >= 3 && resp[0] == 0x7F && resp[2] == 0x78 {
@@ -354,36 +436,40 @@ pub(crate) async fn send_obd_dtc_clear<T: TransportLayer>(transport: &T) {
                     continue;
                 }
                 tracing::debug!("OBD DTC clear response: {:02X?}", resp);
-                return;
+                match resp.first() {
+                    Some(0x44) => DtcClearOutcome::Cleared,
+                    Some(0x7F) if resp.len() >= 3 && resp[1] == 0x04 => {
+                        DtcClearOutcome::Refused { nrc: resp[2] }
+                    }
+                    _ => DtcClearOutcome::Unexpected(resp),
+                }
             }
-            Ok(Some(Err(e))) => {
-                tracing::debug!("OBD DTC clear: response error {e} (OK)");
-                return;
-            }
-            Ok(None) => {
-                tracing::debug!("OBD DTC clear: stream ended");
-                return;
-            }
-            Err(_) => {
-                tracing::debug!(
-                    "OBD DTC clear: no response within {} s (OK)",
-                    timeout.as_secs()
-                );
-                return;
-            }
+            Ok(Some(Err(e))) => DtcClearOutcome::Failed(e.to_string()),
+            Ok(None) => DtcClearOutcome::Failed("the transport closed".to_owned()),
+            Err(_) => DtcClearOutcome::Silent,
+        };
+        if outcome.is_cleared() {
+            tracing::info!("{outcome}");
+        } else {
+            // Not an error, but it explains a conditionsNotCorrect later on.
+            tracing::warn!("{outcome}");
         }
+        return outcome;
     }
 }
 
 /// Convenience wrapper for CAN-adapter–based paths: builds a temporary
 /// [`IsoTPAdapter`] on the fixed OBD-II IDs (TX 0x700, RX 0x7E8), calls
 /// [`send_obd_dtc_clear`], then discards it.
-pub(crate) async fn send_obd_dtc_clear_via_adapter(adapter: &AsyncCanAdapter) {
-    let mut config =
-        IsoTPConfig::new_from_tx_rx(0, Identifier::from(0x700u32), Identifier::from(0x7E8u32));
+pub(crate) async fn send_obd_dtc_clear_via_adapter(adapter: &AsyncCanAdapter) -> DtcClearOutcome {
+    let mut config = IsoTPConfig::new_from_tx_rx(
+        0,
+        Identifier::from(OBD_TESTER_ID),
+        Identifier::from(OBD_ECU_ID),
+    );
     config.timeout = std::time::Duration::from_secs(2);
     let isotp = IsoTPAdapter::new(adapter, config);
-    send_obd_dtc_clear(&isotp).await;
+    send_obd_dtc_clear(&isotp).await
 }
 
 // ── Core flash sequence ───────────────────────────────────────────────────────
@@ -801,6 +887,13 @@ pub async fn probe(
     flash_info: &'static FlashInfo,
     what: ProbeKind,
 ) -> Result<ProbeOutcome, FlashError> {
+    // The unlock probe enters the programming session, so it needs the clear
+    // too — on the hardware path, before anything else is open.
+    if matches!(what, ProbeKind::UnlockState) && obd_clear_needs_own_device(interface) {
+        let outcome = clear_obd_dtcs(interface).await;
+        tracing::info!(%outcome, "OBD-II DTC clear before the unlock probe");
+    }
+
     let session = Session::open(interface, flash_info, None)?;
     let result = session.probe(flash_info, what).await;
     session.close().await;

@@ -42,17 +42,10 @@ use mqb_flash_uds::{
 };
 use mqb_modules::{FlashInfo, PreparedBlockData};
 
+mod logging;
+
 fn main() -> iced::Result {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::builder()
-                .with_default_directive("mqb_flash=info".parse().unwrap())
-                .from_env_lossy()
-                .add_directive("wgpu_core=warn".parse().unwrap())
-                .add_directive("wgpu_hal=warn".parse().unwrap())
-                .add_directive("naga=warn".parse().unwrap()),
-        )
-        .init();
+    logging::init();
     iced::application(State::default, update, view)
         .title("MQB Flash")
         .subscription(subscription)
@@ -172,6 +165,10 @@ struct State {
     socketcan_name: String,
     j2534_dll_path: String,
     stmin_input: String,
+    /// Protocol logging to a file — off unless the user asks for it.
+    logging_enabled: bool,
+    /// Where that log is going, once it has been opened.
+    log_path: Option<PathBuf>,
 
     // Identification
     scan_results: Vec<ChannelIdentification>,
@@ -218,6 +215,8 @@ impl Default for State {
             socketcan_name: String::new(),
             j2534_dll_path: String::new(),
             stmin_input: String::new(),
+            logging_enabled: false,
+            log_path: None,
             scan_results: Vec::new(),
             chosen_candidate: None,
             chosen_channel: None,
@@ -464,6 +463,7 @@ enum Message {
     SocketCanNameChanged(String),
     J2534DllPathChanged(String),
     StminChanged(String),
+    LoggingToggled(bool),
 
     // Identify
     ScanProgress(ScanProgress),
@@ -528,6 +528,25 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::StminChanged(s) => {
             state.stmin_input = s;
+            Task::none()
+        }
+
+        Message::LoggingToggled(on) => {
+            match logging::set_enabled(on) {
+                Ok(path) => {
+                    state.logging_enabled = on;
+                    state.log_path = path;
+                    if let Some(path) = &state.log_path {
+                        tracing::info!(path = %path.display(), "Protocol logging enabled");
+                    }
+                }
+                Err(e) => {
+                    // Not being able to log is not a reason to stop.
+                    state.logging_enabled = false;
+                    state.log_path = None;
+                    state.error = Some(format!("Could not start logging: {e}"));
+                }
+            }
             Task::none()
         }
 
@@ -1131,6 +1150,13 @@ fn handle_progress(state: &mut State, update: ProgressUpdate) -> Task<Message> {
             state.progress = 0.01;
             state.progress_step = "Clearing fault codes…".into();
         }
+        ProgressUpdate::DtcsCleared(outcome) => {
+            if outcome.is_cleared() {
+                state.log("Emission fault codes cleared");
+            } else {
+                state.log(format!("Warning: {outcome}"));
+            }
+        }
         ProgressUpdate::Connecting => {
             state.progress = 0.02;
             state.progress_step = "Opening a diagnostic session…".into();
@@ -1453,6 +1479,16 @@ fn view_interface(state: &State) -> Element<'_, Message> {
         .spacing(8)
         .align_y(Alignment::Center),
     );
+
+    // Must be on before scanning — nothing already past can be logged.
+    col = col.push(
+        iced::widget::checkbox(state.logging_enabled)
+            .label("Write a protocol log (every UDS request and response)")
+            .on_toggle(Message::LoggingToggled),
+    );
+    if let Some(path) = &state.log_path {
+        col = col.push(text(format!("Logging to {}", path.display())).size(12));
+    }
 
     col.into()
 }

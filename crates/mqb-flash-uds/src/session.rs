@@ -35,23 +35,16 @@ use crate::identify::{ChannelIdentification, IDENT_CHANNELS};
 
 use crate::flash::{
     make_isotp_config_with_timeout, read_dids, read_ecu_with_transport, run_probe,
-    run_with_transport, send_obd_dtc_clear_via_adapter, send_progress, write_did, FlashError,
-    FlashOptions, ProbeKind, ProbeOutcome, ProgressUpdate, FLASH_TIMEOUT, IDENT_TIMEOUT,
+    run_with_transport, send_obd_dtc_clear_via_adapter, write_did, DtcClearOutcome, FlashError,
+    FlashOptions, ProbeKind, ProbeOutcome, FLASH_TIMEOUT, IDENT_TIMEOUT,
 };
 
 // The hardware ISO 15765 path needs its own OBD-II channel; the raw-CAN path
 // layers one over the adapter it already has.
 #[cfg(feature = "j2534")]
-use crate::flash::send_obd_dtc_clear;
+use crate::flash::{send_obd_dtc_clear, OBD_ECU_ID, OBD_TESTER_ID};
 #[cfg(feature = "j2534")]
 use automotive::can::Identifier;
-
-/// The OBD-II tester address used for the emission DTC clear.
-#[cfg(feature = "j2534")]
-const OBD_TESTER_ID: u32 = 0x700;
-/// The OBD-II ECU address used for the emission DTC clear.
-#[cfg(feature = "j2534")]
-const OBD_ECU_ID: u32 = 0x7E8;
 
 /// An open connection to an ECU.
 ///
@@ -81,9 +74,6 @@ enum Inner {
 #[cfg(feature = "j2534")]
 struct NativeChannel {
     transport: automotive::j2534::J2534NativeIsoTpTransport,
-    /// Kept so the transient OBD-II channel can be opened on the same device.
-    dll: Option<String>,
-    bitrate: u32,
 }
 
 /// Run `body` over whatever transport this session has.
@@ -161,11 +151,7 @@ impl Session {
                 config.separation_time_min =
                     Some(std::time::Duration::from_micros(stmin_us as u64));
                 let transport = open_native_isotp(dll.as_deref(), *bitrate, config)?;
-                Inner::Native(NativeChannel {
-                    transport,
-                    dll: dll.clone(),
-                    bitrate: *bitrate,
-                })
+                Inner::Native(NativeChannel { transport })
             }
             #[cfg(not(feature = "j2534"))]
             Interface::J2534 {
@@ -259,13 +245,12 @@ impl Session {
         what: ProbeKind,
     ) -> Result<ProbeOutcome, FlashError> {
         self.require_channel(flash_info)?;
-        // The unlock probe has to enter the programming session, and the ECU
-        // refuses the programming precondition check (0x0203) with
-        // conditionsNotCorrect while emission DTCs are stored. `flash_blocks`
-        // clears them first for exactly this reason; a probe that skips the
-        // clear is refused where the flash that follows it succeeds.
-        if matches!(what, ProbeKind::UnlockState) {
-            self.clear_obd_dtcs().await;
+        // The unlock probe enters the programming session, so it needs the DTC
+        // clear too. Raw CAN can do that from inside the session; the hardware
+        // path was cleared by the free `probe` before this one was opened.
+        if matches!(what, ProbeKind::UnlockState) && !obd_clear_needs_own_device(&self.interface) {
+            let outcome = self.clear_obd_dtcs().await;
+            tracing::info!(%outcome, "OBD-II DTC clear before the unlock probe");
         }
         let config = self.config(flash_info);
         with_transport!(self, config, |t| run_probe(t, flash_info, what).await)
@@ -308,37 +293,29 @@ impl Session {
         with_transport!(self, config, |t| write_did(t, did, value).await)
     }
 
-    /// Send the OBD-II mode `0x04` emission DTC clear. Best effort.
+    /// Send the OBD-II mode `0x04` emission DTC clear over this session's
+    /// connection.
     ///
-    /// VW ECUs want this before the programming precondition check. It uses the
-    /// fixed OBD-II ID pair, so a hardware ISO 15765 connection needs a second
-    /// channel of its own — the one case where the device must be reopened.
-    pub async fn clear_obd_dtcs(&self) {
+    /// Raw CAN only: one adapter carries both ID pairs. A hardware ISO 15765
+    /// channel's IDs are fixed at open and the device will not open twice, so
+    /// there the clear belongs to the free [`clear_obd_dtcs`] and this reports
+    /// [`DtcClearOutcome::Failed`].
+    pub async fn clear_obd_dtcs(&self) -> DtcClearOutcome {
         match self.inner.as_ref().expect("session is open") {
             Inner::Can(adapter) => send_obd_dtc_clear_via_adapter(adapter).await,
             #[cfg(feature = "j2534")]
-            Inner::Native(native) => {
-                let config = IsoTPConfig::new_from_tx_rx(
-                    0,
-                    Identifier::Standard(OBD_TESTER_ID),
-                    Identifier::Standard(OBD_ECU_ID),
-                );
-                match open_native_isotp(native.dll.as_deref(), native.bitrate, config) {
-                    Ok(obd) => {
-                        send_obd_dtc_clear(&obd).await;
-                        // The flash channel is reopened right after this, so
-                        // the OBD channel must be fully torn down first.
-                        let _ = tokio::task::spawn_blocking(move || drop(obd)).await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("OBD DTC clear channel open failed: {e} (continuing)")
-                    }
-                }
-            }
+            Inner::Native(_) => DtcClearOutcome::Failed(
+                "a hardware ISO 15765 session cannot also hold the OBD-II channel; \
+                 clear before opening it"
+                    .to_owned(),
+            ),
         }
     }
 
     /// Flash a set of prepared blocks, in the order given — no reordering here.
+    ///
+    /// Does not clear emission DTCs — the free [`crate::flash_blocks`] owns
+    /// that ordering.
     pub async fn flash_blocks(
         &self,
         flash_info: &FlashInfo,
@@ -346,8 +323,6 @@ impl Session {
         opts: &FlashOptions,
     ) -> Result<(), FlashError> {
         self.require_channel(flash_info)?;
-        send_progress(opts, ProgressUpdate::ClearingDtcs);
-        self.clear_obd_dtcs().await;
 
         // Fall back to the module's own STmin, not a global constant: Simos
         // tolerates 400 µs, the transmission and AWD ECUs need 900 µs.
@@ -355,15 +330,9 @@ impl Session {
         let stmin_us = opts.stmin_override.unwrap_or(flash_info.default_stmin_us);
         config.separation_time_min = Some(std::time::Duration::from_micros(stmin_us as u64));
 
-        let result = with_transport!(self, config, |t| {
+        with_transport!(self, config, |t| {
             run_with_transport(t, flash_info, blocks, opts).await
-        });
-
-        // After the ECU reboots, clear emission DTCs again (best effort).
-        if result.is_ok() {
-            self.clear_obd_dtcs().await;
-        }
-        result
+        })
     }
 
     /// Close the connection, moving the teardown off the async executor.
@@ -517,6 +486,57 @@ pub async fn identify_all_channels_with_progress(
     found
 }
 
+/// Whether the OBD-II clear on this interface needs the device to itself.
+///
+/// Raw CAN does not; a hardware ISO 15765 channel does, because its ID pair is
+/// fixed at open and the device will not open twice.
+pub fn obd_clear_needs_own_device(interface: &Interface) -> bool {
+    !mqb_transport::supports_raw_can(interface)
+}
+
+/// Send the OBD-II mode `0x04` emission DTC clear on a connection of its own.
+///
+/// Opens the interface, clears, and closes again, so no [`Session`] may be open
+/// on the same device. Prefer [`Session::clear_obd_dtcs`] when a raw-CAN
+/// session already exists.
+///
+/// Best effort: failures come back as a [`DtcClearOutcome`] for the caller to
+/// report, never as an error.
+pub async fn clear_obd_dtcs(interface: &Interface) -> DtcClearOutcome {
+    #[cfg(feature = "j2534")]
+    if let Interface::J2534 {
+        dll,
+        bitrate,
+        native_isotp: true,
+    } = interface
+    {
+        let config = IsoTPConfig::new_from_tx_rx(
+            0,
+            Identifier::Standard(OBD_TESTER_ID),
+            Identifier::Standard(OBD_ECU_ID),
+        );
+        return match open_native_isotp(dll.as_deref(), *bitrate, config) {
+            Ok(obd) => {
+                let outcome = send_obd_dtc_clear(&obd).await;
+                // The next open needs this device free, and J2534 teardown
+                // joins DLL threads — keep it off the executor.
+                let _ = tokio::task::spawn_blocking(move || drop(obd)).await;
+                outcome
+            }
+            Err(e) => DtcClearOutcome::Failed(e.to_string()),
+        };
+    }
+
+    match open_can_adapter(interface, "the OBD-II DTC clear") {
+        Ok(adapter) => {
+            let outcome = send_obd_dtc_clear_via_adapter(&adapter).await;
+            let _ = tokio::task::spawn_blocking(move || drop(adapter)).await;
+            outcome
+        }
+        Err(e) => DtcClearOutcome::Failed(e.to_string()),
+    }
+}
+
 #[cfg(feature = "j2534")]
 fn open_native_isotp(
     dll: Option<&str>,
@@ -604,6 +624,40 @@ mod tests {
             "the predicate promised one session reaches every channel"
         );
         session.close().await;
+    }
+
+    /// A hardware ISO 15765 channel cannot carry the OBD-II ID pair as well, so
+    /// its clear needs the device to itself; raw CAN does not.
+    #[test]
+    fn only_the_hardware_isotp_path_needs_its_own_device_to_clear() {
+        assert!(obd_clear_needs_own_device(&Interface::J2534 {
+            dll: None,
+            bitrate: 500_000,
+            native_isotp: true,
+        }));
+        assert!(!obd_clear_needs_own_device(&Interface::J2534 {
+            dll: None,
+            bitrate: 500_000,
+            native_isotp: false,
+        }));
+        assert!(!obd_clear_needs_own_device(&Interface::Panda));
+    }
+
+    /// A refusal must be reported, not swallowed: NRC 0x22 here is what shows
+    /// up as conditionsNotCorrect at `0x0203` a few requests later.
+    #[tokio::test]
+    async fn a_refused_dtc_clear_is_reported_as_a_refusal() {
+        let iface = Interface::Fake(fixture("obd_dtc_clear_refused.can"));
+        let outcome = clear_obd_dtcs(&iface).await;
+        assert_eq!(outcome, DtcClearOutcome::Refused { nrc: 0x22 });
+        assert!(!outcome.is_cleared());
+    }
+
+    /// `0x78` is consumed transparently and the `0x44` behind it is the answer.
+    #[tokio::test]
+    async fn a_pending_response_does_not_end_the_dtc_clear() {
+        let iface = Interface::Fake(fixture("obd_dtc_clear_pending.can"));
+        assert_eq!(clear_obd_dtcs(&iface).await, DtcClearOutcome::Cleared);
     }
 
     /// The native ISO 15765 path must never open a speculative session: its
