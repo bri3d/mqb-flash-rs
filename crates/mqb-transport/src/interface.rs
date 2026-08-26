@@ -1,5 +1,6 @@
 //! Transport interface selection.
 
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 /// Which physical interface to use for CAN/ISO-TP communication.
@@ -30,12 +31,23 @@ pub enum Interface {
     /// Fixture-driven fake interface for testing.  Path must point to a `.can`
     /// fixture file.  Use `fake:<path>` on the command line.
     Fake(PathBuf),
-    /// DoIP (ISO 13400-2) entity over Ethernet, `doip:<host>[:<port>]`.
+    /// DoIP (ISO 13400-2) entity over Ethernet,
+    /// `doip:<host>[:<port>][@<local>]`.
     ///
     /// Not a CAN interface: the entity routes UDS to a logical ECU address, so
     /// there is no bus to see raw frames on.  `host` is usually the gateway's
     /// link-local address, discovered over UDP.
-    DoIp { host: String, port: u16 },
+    ///
+    /// `local` — the local interface address to connect from, as reported by
+    /// discovery.  A host with more than one link-local NIC has more than one
+    /// route to a `169.254.x.x` entity, and the one the routing table prefers
+    /// is not necessarily the one that answered; `None` leaves the choice to
+    /// the routing table.
+    DoIp {
+        host: String,
+        port: u16,
+        local: Option<IpAddr>,
+    },
 }
 
 /// Registered DoIP port (ISO 13400-2), TCP and UDP.
@@ -64,8 +76,16 @@ impl std::fmt::Display for Interface {
                 }
             }
             Interface::Fake(p) => write!(f, "fake:{}", p.display()),
-            Interface::DoIp { host, port } if *port == DOIP_PORT => write!(f, "doip:{host}"),
-            Interface::DoIp { host, port } => write!(f, "doip:{host}:{port}"),
+            Interface::DoIp { host, port, local } => {
+                write!(f, "doip:{host}")?;
+                if *port != DOIP_PORT {
+                    write!(f, ":{port}")?;
+                }
+                match local {
+                    Some(addr) => write!(f, "@{addr}"),
+                    None => Ok(()),
+                }
+            }
         }
     }
 }
@@ -103,27 +123,46 @@ impl std::str::FromStr for Interface {
     }
 }
 
-/// Parse the suffix after `"doip:"` — `<host>` or `<host>:<port>`.
+/// Parse the suffix after `"doip:"` — `<host>`, `<host>:<port>`, either with
+/// an optional `@<local>` bind address.
 fn parse_doip(rest: &str) -> Result<Interface, String> {
+    const FORM: &str = "doip interface must be 'doip:<host>[:<port>][@<local>]'";
     if rest.is_empty() {
-        return Err("doip interface must be 'doip:<host>[:<port>]'".to_owned());
+        return Err(FORM.to_owned());
+    }
+    // `@` appears in neither a hostname nor an IPv6 literal, so it splits
+    // cleanly off the end.
+    let (rest, local) = match rest.rsplit_once('@') {
+        Some((rest, addr)) => (
+            rest,
+            Some(
+                addr.parse::<IpAddr>()
+                    .map_err(|_| format!("'{addr}' is not a local IP address"))?,
+            ),
+        ),
+        None => (rest, None),
+    };
+    if rest.is_empty() {
+        return Err(FORM.to_owned());
     }
     // Only a trailing numeric segment is a port; anything else is part of the
     // host, so a bare IPv6 literal stays intact.
     if let Some((host, maybe_port)) = rest.rsplit_once(':') {
         if let Ok(port) = maybe_port.parse::<u16>() {
             if host.is_empty() {
-                return Err("doip interface must be 'doip:<host>[:<port>]'".to_owned());
+                return Err(FORM.to_owned());
             }
             return Ok(Interface::DoIp {
                 host: host.to_owned(),
                 port,
+                local,
             });
         }
     }
     Ok(Interface::DoIp {
         host: rest.to_owned(),
         port: DOIP_PORT,
+        local,
     })
 }
 
@@ -197,24 +236,41 @@ mod tests {
             "doip:169.254.1.2",
             "doip:192.168.0.10:13401",
             "doip:gateway.local",
+            "doip:169.254.250.248@169.254.108.35",
+            "doip:169.254.250.248:13401@169.254.108.35",
         ] {
             assert_eq!(parse(s).to_string(), s);
         }
     }
 
+    /// Discovery reports which NIC answered; the bind address keeps a later
+    /// connect on it rather than on whichever one the routing table prefers.
+    #[test]
+    fn a_local_bind_address_survives_parsing() {
+        let Interface::DoIp { host, port, local } = parse("doip:169.254.250.248@169.254.108.35")
+        else {
+            panic!("an @-suffixed doip: must parse as DoIp");
+        };
+        assert_eq!(host, "169.254.250.248");
+        assert_eq!(port, DOIP_PORT);
+        assert_eq!(local, Some("169.254.108.35".parse::<IpAddr>().unwrap()));
+        assert!("doip:169.254.1.2@not-an-ip".parse::<Interface>().is_err());
+    }
+
     #[test]
     fn the_default_doip_port_is_implicit() {
-        let Interface::DoIp { host, port } = parse("doip:169.254.1.2") else {
+        let Interface::DoIp { host, port, local } = parse("doip:169.254.1.2") else {
             panic!("doip: must parse as DoIp");
         };
         assert_eq!(host, "169.254.1.2");
         assert_eq!(port, DOIP_PORT);
+        assert_eq!(local, None);
     }
 
     /// A bare IPv6 literal is all host: only a numeric tail is a port.
     #[test]
     fn an_ipv6_host_keeps_its_colons() {
-        let Interface::DoIp { host, port } = parse("doip:fe80::1%eth0") else {
+        let Interface::DoIp { host, port, .. } = parse("doip:fe80::1%eth0") else {
             panic!("an IPv6 host must parse as DoIp");
         };
         assert_eq!(host, "fe80::1%eth0");

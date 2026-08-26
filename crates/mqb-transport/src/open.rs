@@ -189,6 +189,7 @@ mod tests {
         let iface = Interface::DoIp {
             host: "169.254.1.2".into(),
             port: 13400,
+            local: None,
         };
         assert!(!supports_raw_can(&iface));
 
