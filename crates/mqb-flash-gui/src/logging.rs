@@ -217,7 +217,10 @@ mod tests {
         assert!(body.contains("TX 1003"), "PDU bytes missing from {body}");
         assert!(!body.contains("TX before"), "logged while disabled");
         assert!(!body.contains("TX after"), "kept logging after disable");
-        assert!(!body.contains("noise"), "non-protocol target reached the log");
+        assert!(
+            !body.contains("noise"),
+            "non-protocol target reached the log"
+        );
 
         let _ = std::fs::remove_file(&path);
     }

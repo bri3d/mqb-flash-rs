@@ -24,6 +24,10 @@ test:
 fmt:
     cargo fmt --all
 
+# Point git at the versioned hooks in .githooks/ (run once per clone)
+install-hooks:
+    git config core.hooksPath .githooks
+
 # Verify formatting without changing anything (what CI enforces)
 fmt-check:
     cargo fmt --all --check

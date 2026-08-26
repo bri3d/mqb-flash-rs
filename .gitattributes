@@ -1,0 +1,4 @@
+# Git-for-Windows runs hooks through its bundled sh, which chokes on CRLF
+# ("$'\r': command not found"). core.autocrlf=true is common on Windows clones,
+# so pin the hooks to LF regardless of the checking-out machine.
+.githooks/** text eol=lf

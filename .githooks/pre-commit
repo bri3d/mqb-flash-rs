@@ -1,0 +1,29 @@
+#!/bin/sh
+#
+# Reject commits that `cargo fmt` would rewrite — the same gate CI's
+# "Formatting" step applies (`cargo fmt --all --check`), just earlier.
+#
+# Installed by `just install-hooks`, which points core.hooksPath here so the
+# hook is versioned with the repo instead of living untracked in .git/hooks.
+
+# Doc/config-only commits do not need rustfmt.
+if git diff --cached --name-only --diff-filter=ACMR | grep -q '\.rs$'; then
+    :
+else
+    exit 0
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not on PATH, skipping the formatting check." >&2
+    exit 0
+fi
+
+# Whole-workspace, exactly as CI runs it: a staged-files-only check would still
+# let an unformatted file already in the tree fail the build.
+if ! cargo fmt --all --check; then
+    echo >&2
+    echo "pre-commit: rustfmt would rewrite the files above." >&2
+    echo "  Fix:  just fmt   (or: cargo fmt --all)   then re-stage and commit." >&2
+    echo "  Skip: git commit --no-verify" >&2
+    exit 1
+fi
