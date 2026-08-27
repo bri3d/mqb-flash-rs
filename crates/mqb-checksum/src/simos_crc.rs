@@ -102,11 +102,11 @@ pub fn validate_simos<'a>(
     }
 
     let mut crc: u32 = 0;
-    for pair in addresses.chunks_exact(2) {
-        if pair[1] >= data.len() {
+    for &[start, end] in addresses.as_chunks::<2>().0 {
+        if end >= data.len() {
             return (ChecksumState::Failed, Cow::Borrowed(data));
         }
-        crc = crc32_simos_update(crc, &data[pair[0]..=pair[1]]);
+        crc = crc32_simos_update(crc, &data[start..=end]);
     }
     let calculated = crc;
 

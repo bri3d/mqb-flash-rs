@@ -147,12 +147,11 @@ pub fn validate_ecm3(addresses: &[usize], cal_data: &[u8], fix: bool) -> (Checks
     let init_lo = read_u32_le(cal_data, checksum_loc + 12) as u64;
     let mut checksum: u64 = (init_hi << 32) | init_lo;
 
-    for pair in addresses.chunks_exact(2) {
-        let (start, end) = (pair[0], pair[1]);
+    for &[start, end] in addresses.as_chunks::<2>().0 {
         if end > cal_data.len() {
             return (ChecksumState::Failed, cal_data.to_vec());
         }
-        for chunk in cal_data[start..end].chunks_exact(4) {
+        for chunk in cal_data[start..end].as_chunks::<4>().0 {
             let word = read_u32_le(chunk, 0) as u64;
             checksum = checksum.wrapping_add(word);
         }

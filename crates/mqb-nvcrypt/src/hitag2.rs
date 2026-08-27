@@ -164,14 +164,14 @@ pub fn keystream_word(key: &[u8; 6], iv: &[u8; 4], serial: u16) -> [u8; 2] {
 pub fn crypt(data: &[u8], key: &[u8; 6], iv: &[u8; 4], serial: u16) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
     let mut s = serial;
-    let mut chunks = data.chunks_exact(2);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = data.as_chunks::<2>();
+    for chunk in chunks {
         let ks = keystream_word(key, iv, s);
         out.push(chunk[0] ^ ks[0]);
         out.push(chunk[1] ^ ks[1]);
         s = s.wrapping_add(2);
     }
-    out.extend_from_slice(chunks.remainder());
+    out.extend_from_slice(remainder);
     out
 }
 
